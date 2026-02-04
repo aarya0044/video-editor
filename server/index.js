@@ -5,17 +5,12 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import VideoProcessor from './video-processor.js';
-// Add this at the VERY TOP of server/index.js (line 1)
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// To this:
-const PORT = process.env.PORT || 5000;
-
 const app = express();
+const PORT = process.env.PORT || 5000;
 
 
 // Initialize video processor ONCE
