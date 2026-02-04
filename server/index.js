@@ -25,7 +25,8 @@ const videoProcessor = new VideoProcessor();
 app.use(cors({
   origin: [
     'http://localhost:3000',
-    'https://video-editor-project.netlify.app'  // Your new Netlify URL
+    'https://video-editor-project.netlify.app',
+    'https://video-editor-backend-gllw.onrender.com'  // Add this too
   ],
   credentials: true
 }));
