@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: video-editor-backend
+    env: node
+    rootDir: server
+    buildCommand: apt-get update && apt-get install -y ffmpeg && npm install
+    startCommand: node index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
