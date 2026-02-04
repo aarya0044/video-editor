@@ -7,7 +7,13 @@ const path = require('path');
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: [
+    'http://localhost:3000',
+    'https://video-editor-project.netlify.app'  // Your new Netlify URL
+  ],
+  credentials: true
+}));
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 app.use('/outputs', express.static('outputs'));
