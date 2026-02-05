@@ -12,11 +12,11 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Environment detection
+// Environment detection - CRITICAL FIX
 const isProduction = process.env.NODE_ENV === 'production';
 const BASE_URL = isProduction ? 'https://video-editor-backend-0hda.onrender.com' : `http://localhost:${PORT}`;
 
-// Initialize video processor ONCE
+// Initialize video processor
 const videoProcessor = new VideoProcessor();
 
 // Middleware - FIXED CORS
@@ -25,7 +25,7 @@ app.use(cors({
     'http://localhost:3000',
     'http://localhost:5173',
     'https://video-editor-project.netlify.app',
-    'https://video-editor-backend-0hda.onrender.com'
+    'https://video-editor-backend-0hda.onrender.com'  // FIXED: Correct URL
   ],
   credentials: true
 }));
@@ -65,7 +65,7 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024 }
 });
 
-// UPLOAD ENDPOINT - FIXED URLs
+// UPLOAD ENDPOINT - FIXED URLS
 app.post('/api/upload', upload.array('files'), (req, res) => {
   try {
     console.log('📁 Files received:', req.files?.length || 0);
@@ -86,6 +86,8 @@ app.post('/api/upload', upload.array('files'), (req, res) => {
       url: `${BASE_URL}/uploads/${file.filename}`  // FIXED: Uses BASE_URL
     }));
     
+    console.log('✅ Files processed:', files.map(f => f.url));
+    
     res.json({
       success: true,
       message: `Uploaded ${files.length} file(s)!`,
@@ -104,6 +106,16 @@ app.post('/api/upload', upload.array('files'), (req, res) => {
 app.get('/api/debug-uploads', (req, res) => {
   try {
     const uploadsDir = path.join(__dirname, 'uploads');
+    
+    if (!fs.existsSync(uploadsDir)) {
+      return res.json({ 
+        success: true, 
+        count: 0, 
+        files: [],
+        message: 'Uploads directory is empty'
+      });
+    }
+    
     const files = fs.readdirSync(uploadsDir);
     
     const fileDetails = files.map(filename => {
@@ -133,7 +145,6 @@ app.get('/api/debug-uploads', (req, res) => {
 // SINGLE VIDEO EXPORT ENDPOINT
 app.post('/api/export-video', express.json(), async (req, res) => {
   console.log('🎬 Received video export request');
-  console.log('📦 Request body:', JSON.stringify(req.body, null, 2));
   
   try {
     const { clips, projectName = `video-${Date.now()}` } = req.body;
@@ -146,23 +157,6 @@ app.post('/api/export-video', express.json(), async (req, res) => {
     }
     
     console.log(`📋 Processing ${clips.length} clips for project: ${projectName}`);
-    
-    // Log each clip's details
-    clips.forEach((clip, index) => {
-      console.log(`📝 Clip ${index + 1}:`);
-      console.log(`   Name: ${clip.name}`);
-      console.log(`   Type: ${clip.type}`);
-      console.log(`   URL: ${clip.url}`);
-      console.log(`   Start: ${clip.start}, End: ${clip.end}, Duration: ${clip.end - clip.start}`);
-      console.log(`   Text Overlay: ${clip.textOverlay?.enabled ? 'Enabled' : 'Disabled'}`);
-      
-      // Extract filename from URL
-      const urlParts = clip.url.split('/');
-      const filename = urlParts[urlParts.length - 1];
-      const filePath = path.join(__dirname, 'uploads', filename);
-      console.log(`   Expected file: ${filename}`);
-      console.log(`   File exists: ${fs.existsSync(filePath) ? '✅ YES' : '❌ NO'}`);
-    });
     
     // Set longer timeout for video processing
     req.setTimeout(300000); // 5 minutes
@@ -274,21 +268,34 @@ app.get('/api/test', (req, res) => {
   res.json({ 
     message: '✅ Video Editor Server is running!',
     time: new Date().toLocaleString(),
+    environment: isProduction ? 'production' : 'development',
+    baseUrl: BASE_URL,
     endpoints: [
       'POST /api/upload - Upload media files',
       'POST /api/export-video - Export timeline as MP4 video',
       'POST /api/export - Export timeline as text instructions',
       'GET /api/test - Test server connection'
-    ],
-    note: 'For video export, ensure FFmpeg is installed on your system'
+    ]
+  });
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('❌ Server Error:', err);
+  res.status(500).json({ 
+    success: false, 
+    error: err.message,
+    note: 'Check server logs for details'
   });
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`✅ Server running at http://localhost:${PORT}`);
-  console.log(`📁 Uploads: http://localhost:${PORT}/uploads`);
-  console.log(`📤 Outputs: http://localhost:${PORT}/outputs`);
-  console.log(`🎬 Video export endpoint: POST http://localhost:${PORT}/api/export-video`);
-  console.log(`🚀 Ready for video editing!`);
+  console.log(`🚀 Video Editor Server Started!`);
+  console.log(`📍 Environment: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
+  console.log(`📡 Base URL: ${BASE_URL}`);
+  console.log(`🔗 Test endpoint: ${BASE_URL}/api/test`);
+  console.log(`📁 Uploads: ${BASE_URL}/uploads`);
+  console.log(`📤 Outputs: ${BASE_URL}/outputs`);
+  console.log(`🎬 Ready for video editing!`);
 });
