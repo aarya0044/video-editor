@@ -12,16 +12,20 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Environment detection
+const isProduction = process.env.NODE_ENV === 'production';
+const BASE_URL = isProduction ? 'https://video-editor-backend-0hda.onrender.com' : `http://localhost:${PORT}`;
 
 // Initialize video processor ONCE
 const videoProcessor = new VideoProcessor();
 
-// Middleware
+// Middleware - FIXED CORS
 app.use(cors({
   origin: [
     'http://localhost:3000',
+    'http://localhost:5173',
     'https://video-editor-project.netlify.app',
-    'https://video-editor-backend-gllw.onrender.com'  // Add this too
+    'https://video-editor-backend-0hda.onrender.com'
   ],
   credentials: true
 }));
@@ -61,7 +65,7 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024 }
 });
 
-// UPLOAD ENDPOINT
+// UPLOAD ENDPOINT - FIXED URLs
 app.post('/api/upload', upload.array('files'), (req, res) => {
   try {
     console.log('📁 Files received:', req.files?.length || 0);
@@ -79,7 +83,7 @@ app.post('/api/upload', upload.array('files'), (req, res) => {
       path: `/uploads/${file.filename}`,
       type: file.mimetype,
       size: file.size,
-      url: `http://localhost:${PORT}/uploads/${file.filename}`
+      url: `${BASE_URL}/uploads/${file.filename}`  // FIXED: Uses BASE_URL
     }));
     
     res.json({
@@ -109,7 +113,7 @@ app.get('/api/debug-uploads', (req, res) => {
         name: filename,
         size: stats.size,
         type: path.extname(filename),
-        url: `http://localhost:${PORT}/uploads/${filename}`
+        url: `${BASE_URL}/uploads/${filename}`  // FIXED: Uses BASE_URL
       };
     });
     
