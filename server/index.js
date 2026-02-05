@@ -21,7 +21,13 @@ const videoProcessor = new VideoProcessor();
 
 // Middleware - FIXED CORS
 app.use(cors({
-  origin: '*', // ALLOW ALL ORIGINS TEMPORARILY
+  origin: [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://video-editor-project.netlify.app',
+    'https://6984698--video-editor-project.netlify.app',
+    'https://*.netlify.app'
+  ],
   credentials: true
 }));
 
