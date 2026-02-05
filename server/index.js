@@ -25,7 +25,9 @@ app.use(cors({
     'http://localhost:3000',
     'http://localhost:5173',
     'https://video-editor-project.netlify.app',
-    'https://video-editor-backend-0hda.onrender.com'  // FIXED: Correct URL
+    'https://6984698--video-editor-project.netlify.app', // ADD THIS SPECIFIC URL
+    'https://*.netlify.app', // ALLOW ALL NETLIFY PREVIEWS
+    'https://video-editor-backend-0hda.onrender.com'
   ],
   credentials: true
 }));
