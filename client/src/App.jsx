@@ -10,6 +10,8 @@ function App() {
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
 
+  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
   const previewVideoRef = useRef(null);
 
   const [showTimelinePreview, setShowTimelinePreview] = useState(false);
@@ -708,7 +710,7 @@ function App() {
     });
 
     try {
-      const response = await fetch('http://localhost:5000/api/upload', {
+      const response = await fetch(`${API_BASE}/api/upload`, {
         method: 'POST',
         body: formData,
       });
@@ -719,7 +721,7 @@ function App() {
         const newFiles = data.files.map(file => ({
           id: Date.now() + Math.random(),
           name: file.name,
-          url: `http://localhost:5000${file.path}`,
+          url: `${API_BASE}${file.path}`,
           serverPath: file.path,
           type: file.type,
           duration: file.type.includes('video') ? 10 : 3,
@@ -813,7 +815,7 @@ ${textClipsCount > 0 ? `Text overlays: ${textClipsCount}` : ''}
 Creating MP4 file...`);
 
     // Call the new export-video endpoint
-    const response = await fetch('http://localhost:5000/api/export-video', {
+    const response = await fetch(`${API_BASE}/api/export-video`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -867,7 +869,7 @@ To create the actual MP4:
   // Test server connection
   const testServerConnection = async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/test');
+      const response = await fetch(`${API_BASE}/api/test`);
       const data = await response.json();
       alert(`✅ Server is running!\n\nMessage: ${data.message}\nFFmpeg: ${data.ffmpeg}\n\nEndpoints:\n- ${data.endpoints.join('\n- ')}`);
     } catch (error) {
