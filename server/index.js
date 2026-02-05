@@ -21,16 +21,10 @@ const videoProcessor = new VideoProcessor();
 
 // Middleware - FIXED CORS
 app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'https://video-editor-project.netlify.app',
-    'https://6984698--video-editor-project.netlify.app', // ADD THIS SPECIFIC URL
-    'https://*.netlify.app', // ALLOW ALL NETLIFY PREVIEWS
-    'https://video-editor-backend-0hda.onrender.com'
-  ],
+  origin: '*', // ALLOW ALL ORIGINS TEMPORARILY
   credentials: true
 }));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
