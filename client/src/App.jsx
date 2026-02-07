@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import './App.css';
-import { API_URL } from './config';
 
 function App() {
   const [mediaFiles, setMediaFiles] = useState([]);
@@ -10,14 +9,20 @@ function App() {
   const [exporting, setExporting] = useState(false);
   const fileInputRef = useRef(null);
 
- // const API_BASE = 'https://video-editor-backend-0hda.onrender.com';
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
- const API_BASE = 'http://localhost:5000';
+  // ✅ SINGLE SOURCE OF TRUTH for API URL
+  const API_URL = (() => {
+    // If we're on Netlify (production), use the Render backend
+    if (window.location.hostname.includes('netlify.app')) {
+      return 'https://video-editor-backend-0hda.onrender.com';
+    }
+    // For local development, check environment variable or use localhost
+    return import.meta.env.VITE_API_URL || 'http://localhost:5000';
+  })();
 
- // Right after the API_URL line
-console.log('🔧 API_URL:', API_URL);
-console.log('🔧 Environment:', import.meta.env.MODE);
-console.log('🔧 VITE_API_URL:', import.meta.env.VITE_API_URL);
+  console.log('🔧 Current configuration:');
+  console.log('🔧 Window location:', window.location.hostname);
+  console.log('🔧 API_URL being used:', API_URL);
+  console.log('🔧 Environment mode:', import.meta.env.MODE);
 
   const [showTimelinePreview, setShowTimelinePreview] = useState(false);
 
@@ -47,10 +52,11 @@ console.log('🔧 VITE_API_URL:', import.meta.env.VITE_API_URL);
       currentTime += duration;
     }
     
+    // Only update if clips have changed
     if (JSON.stringify(updatedClips) !== JSON.stringify(timelineClips)) {
       setTimelineClips(updatedClips);
     }
-  }, [timelineClips]);
+  }, [timelineClips.length]); // Run when number of clips changes
 
   // PREVIEW MODAL COMPONENT
   const TimelinePreviewModal = () => {
