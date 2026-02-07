@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import './App.css';
+import { API_URL } from './config';
 
 function App() {
   const [mediaFiles, setMediaFiles] = useState([]);
