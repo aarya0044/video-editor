@@ -8,15 +8,13 @@ function App() {
   const [uploading, setUploading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const fileInputRef = useRef(null);
-  const videoRef = useRef(null);
 
-  const API_BASE = 'https://video-editor-backend-0hda.onrender.com';
+ // const API_BASE = 'https://video-editor-backend-0hda.onrender.com';
 
-  const previewVideoRef = useRef(null);
+ const API_URL = 'http://localhost:5000';
+ const API_BASE = 'http://localhost:5000';
 
   const [showTimelinePreview, setShowTimelinePreview] = useState(false);
-  const [previewPlaying, setPreviewPlaying] = useState(false);
-  const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
 
   // Add debugging
   useEffect(() => {
@@ -28,9 +26,6 @@ function App() {
 
   // Add this useEffect to automatically adjust subsequent clip start times
   useEffect(() => {
-    // This effect runs when timelineClips changes
-    // It ensures clips are sequential with no gaps
-    
     const updatedClips = [...timelineClips];
     let currentTime = 0;
     
@@ -38,666 +33,664 @@ function App() {
       const clip = updatedClips[i];
       const duration = clip.end - clip.start;
       
-      // Update clip's start to current cumulative time
       updatedClips[i] = {
         ...clip,
         start: currentTime,
         end: currentTime + duration
       };
       
-      // Move current time forward by this clip's duration
       currentTime += duration;
     }
     
-    // Only update if something changed (to avoid infinite loop)
     if (JSON.stringify(updatedClips) !== JSON.stringify(timelineClips)) {
       setTimelineClips(updatedClips);
     }
   }, [timelineClips]);
 
-
-   // PREVIEW MODAL COMPONENT
-   const TimelinePreviewModal = () => {
-  const [currentClipIndex, setCurrentClipIndex] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [isVideoLoaded, setIsVideoLoaded] = useState(false);
-  const videoRef = useRef(null);
-  
-  // If no clips, don't show the modal
-  if (!timelineClips || timelineClips.length === 0) {
-    return null;
-  }
-
-  // Make sure currentClipIndex is valid
-  const safeClipIndex = Math.min(currentClipIndex, timelineClips.length - 1);
-  const currentClip = timelineClips[safeClipIndex];
-  
-  if (!currentClip && timelineClips.length > 0) {
-    setCurrentClipIndex(0);
-    return null;
-  }
-
-  const totalDuration = timelineClips.reduce((sum, clip) => {
-    if (!clip || typeof clip.start !== 'number' || typeof clip.end !== 'number') return sum;
-    return sum + (clip.end - clip.start);
-  }, 0);
-  
-  const clipStartTime = timelineClips.slice(0, safeClipIndex).reduce((sum, clip) => {
-    if (!clip || typeof clip.start !== 'number' || typeof clip.end !== 'number') return sum;
-    return sum + (clip.end - clip.start);
-  }, 0);
-  
-  const clipDuration = currentClip ? (currentClip.end - currentClip.start) : 0;
-  
-  // Reset preview when timelineClips changes
-  useEffect(() => {
-    setCurrentClipIndex(0);
-    setCurrentTime(0);
-    setIsPlaying(false);
-    setIsVideoLoaded(false);
-    if (videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.currentTime = 0;
-    }
-  }, [timelineClips.length]); // Reset when the number of clips changes
-  
-  // SIMPLIFIED: Timer for all clips (including video)
-  useEffect(() => {
-    let interval;
+  // PREVIEW MODAL COMPONENT
+  const TimelinePreviewModal = () => {
+    const [currentClipIndex, setCurrentClipIndex] = useState(0);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [isVideoLoaded, setIsVideoLoaded] = useState(false);
+    const videoRef = useRef(null);
     
-    if (isPlaying) {
-      interval = setInterval(() => {
-        setCurrentTime(prev => {
-          const newTime = prev + 0.1;
-          
-          // Check if we've reached the end of this clip
-          if (newTime >= clipStartTime + clipDuration) {
-            // Move to next clip if available
-            if (safeClipIndex < timelineClips.length - 1) {
-              setCurrentClipIndex(prevIndex => prevIndex + 1);
-              return clipStartTime + clipDuration;
-            } else {
-              // End of timeline
-              setIsPlaying(false);
-              return totalDuration;
-            }
-          }
-          
-          return newTime;
-        });
-      }, 100);
+    if (!timelineClips || timelineClips.length === 0) {
+      return null;
     }
+
+    const safeClipIndex = Math.min(currentClipIndex, timelineClips.length - 1);
+    const currentClip = timelineClips[safeClipIndex];
     
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [isPlaying, safeClipIndex, clipStartTime, clipDuration, totalDuration, timelineClips.length]);
-  
-  // Handle video seeking when currentTime changes
-  useEffect(() => {
-    if (currentClip?.type.includes('video') && videoRef.current && isVideoLoaded) {
-      const timeInClip = currentTime - clipStartTime;
-      if (timeInClip >= 0 && timeInClip <= clipDuration) {
-        videoRef.current.currentTime = timeInClip;
+    if (!currentClip && timelineClips.length > 0) {
+      setCurrentClipIndex(0);
+      return null;
+    }
+
+    const totalDuration = timelineClips.reduce((sum, clip) => {
+      if (!clip || typeof clip.start !== 'number' || typeof clip.end !== 'number') return sum;
+      return sum + (clip.end - clip.start);
+    }, 0);
+    
+    const clipStartTime = timelineClips.slice(0, safeClipIndex).reduce((sum, clip) => {
+      if (!clip || typeof clip.start !== 'number' || typeof clip.end !== 'number') return sum;
+      return sum + (clip.end - clip.start);
+    }, 0);
+    
+    const clipDuration = currentClip ? (currentClip.end - currentClip.start) : 0;
+    
+    // Reset preview when timelineClips changes
+    useEffect(() => {
+      setCurrentClipIndex(0);
+      setCurrentTime(0);
+      setIsPlaying(false);
+      setIsVideoLoaded(false);
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.currentTime = 0;
       }
-    }
-  }, [currentTime, currentClip, clipStartTime, clipDuration, isVideoLoaded]);
-  
-  // Handle video play/pause
-  useEffect(() => {
-    if (!currentClip?.type.includes('video') || !videoRef.current || !isVideoLoaded) return;
+    }, [timelineClips.length]);
     
-    const video = videoRef.current;
-    
-    if (isPlaying) {
-      video.play().catch(e => {
-        console.error("Video play error:", e);
-        setIsPlaying(false);
-      });
-    } else {
-      video.pause();
-    }
-  }, [isPlaying, currentClip, isVideoLoaded]);
-  
-  // Handle video loaded
-  useEffect(() => {
-    if (currentClip?.type.includes('video') && videoRef.current) {
-      const video = videoRef.current;
+    // Timer for all clips
+    useEffect(() => {
+      let interval;
       
-      const handleLoadedData = () => {
-        setIsVideoLoaded(true);
-        const timeInClip = currentTime - clipStartTime;
-        if (timeInClip >= 0 && timeInClip <= clipDuration) {
-          video.currentTime = timeInClip;
-        }
-      };
-      
-      const handleError = () => {
-        console.error("Video failed to load");
-        setIsVideoLoaded(false);
-      };
-      
-      video.addEventListener('loadeddata', handleLoadedData);
-      video.addEventListener('error', handleError);
+      if (isPlaying) {
+        interval = setInterval(() => {
+          setCurrentTime(prev => {
+            const newTime = prev + 0.1;
+            
+            if (newTime >= clipStartTime + clipDuration) {
+              if (safeClipIndex < timelineClips.length - 1) {
+                setCurrentClipIndex(prevIndex => prevIndex + 1);
+                return clipStartTime + clipDuration;
+              } else {
+                setIsPlaying(false);
+                return totalDuration;
+              }
+            }
+            
+            return newTime;
+          });
+        }, 100);
+      }
       
       return () => {
-        video.removeEventListener('loadeddata', handleLoadedData);
-        video.removeEventListener('error', handleError);
+        if (interval) clearInterval(interval);
       };
-    }
-  }, [currentClip, currentTime, clipStartTime, clipDuration]);
-  
-  const handlePlayPause = () => {
-    setIsPlaying(!isPlaying);
-  };
-  
-  const handleTimelineChange = (e) => {
-    const newTime = parseFloat(e.target.value);
-    setCurrentTime(newTime);
+    }, [isPlaying, safeClipIndex, clipStartTime, clipDuration, totalDuration, timelineClips.length]);
     
-    // Find which clip this time belongs to
-    let accumulatedTime = 0;
-    let newIndex = 0;
-    for (let i = 0; i < timelineClips.length; i++) {
-      const clip = timelineClips[i];
-      const duration = clip.end - clip.start;
-      if (newTime >= accumulatedTime && newTime < accumulatedTime + duration) {
-        newIndex = i;
-        break;
+    // Handle video seeking when currentTime changes
+    useEffect(() => {
+      if (currentClip?.type.includes('video') && videoRef.current && isVideoLoaded) {
+        const timeInClip = currentTime - clipStartTime;
+        if (timeInClip >= 0 && timeInClip <= clipDuration) {
+          videoRef.current.currentTime = timeInClip;
+        }
       }
-      accumulatedTime += duration;
-    }
+    }, [currentTime, currentClip, clipStartTime, clipDuration, isVideoLoaded]);
     
-    setCurrentClipIndex(newIndex);
-  };
-  
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
-  
-  const handleClose = () => {
-    setShowTimelinePreview(false);
-    setIsPlaying(false);
-    setCurrentTime(0);
-    setCurrentClipIndex(0);
-    setIsVideoLoaded(false);
+    // Handle video play/pause
+    useEffect(() => {
+      if (!currentClip?.type.includes('video') || !videoRef.current || !isVideoLoaded) return;
+      
+      const video = videoRef.current;
+      
+      if (isPlaying) {
+        video.play().catch(e => {
+          console.error("Video play error:", e);
+          setIsPlaying(false);
+        });
+      } else {
+        video.pause();
+      }
+    }, [isPlaying, currentClip, isVideoLoaded]);
     
-    if (videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.currentTime = 0;
-    }
-  };
-  
-  const handleClipClick = (index) => {
-    const clipStart = timelineClips.slice(0, index).reduce((sum, c) => sum + (c.end - c.start), 0);
-    setCurrentTime(clipStart);
-    setCurrentClipIndex(index);
-    setIsPlaying(false);
+    // Reset video when clip changes
+    useEffect(() => {
+      if (currentClip?.type.includes('video')) {
+        console.log('🔄 Loading new video:', currentClip.url);
+        
+        setIsVideoLoaded(false);
+        
+        if (videoRef.current) {
+          videoRef.current.src = currentClip.url;
+          videoRef.current.load();
+          
+          const handleCanPlay = () => {
+            setIsVideoLoaded(true);
+            console.log('✅ Video loaded');
+          };
+          
+          videoRef.current.addEventListener('canplay', handleCanPlay);
+          
+          return () => {
+            if (videoRef.current) {
+              videoRef.current.removeEventListener('canplay', handleCanPlay);
+            }
+          };
+        }
+      } else {
+        setIsVideoLoaded(true);
+      }
+    }, [currentClip]);
     
-    if (videoRef.current) {
-      videoRef.current.pause();
-    }
-  };
-  
-  return (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      background: 'rgba(0,0,0,0.9)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 1000,
-      padding: '20px',
-      animation: 'fadeIn 0.3s ease'
-    }}>
+    const handlePlayPause = () => {
+      setIsPlaying(!isPlaying);
+    };
+    
+    const handleTimelineChange = (e) => {
+      const newTime = parseFloat(e.target.value);
+      setCurrentTime(newTime);
+      
+      let accumulatedTime = 0;
+      let newIndex = 0;
+      for (let i = 0; i < timelineClips.length; i++) {
+        const clip = timelineClips[i];
+        const duration = clip.end - clip.start;
+        if (newTime >= accumulatedTime && newTime < accumulatedTime + duration) {
+          newIndex = i;
+          break;
+        }
+        accumulatedTime += duration;
+      }
+      
+      setCurrentClipIndex(newIndex);
+    };
+    
+    const formatTime = (seconds) => {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    };
+    
+    const handleClose = () => {
+      setShowTimelinePreview(false);
+      setIsPlaying(false);
+      setCurrentTime(0);
+      setCurrentClipIndex(0);
+      setIsVideoLoaded(false);
+      
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.currentTime = 0;
+      }
+    };
+    
+    const handleClipClick = (index) => {
+      const clipStart = timelineClips.slice(0, index).reduce((sum, c) => sum + (c.end - c.start), 0);
+      setCurrentTime(clipStart);
+      setCurrentClipIndex(index);
+      setIsPlaying(false);
+      
+      if (videoRef.current) {
+        videoRef.current.pause();
+      }
+    };
+    
+    return (
       <div style={{
-        background: 'white',
-        borderRadius: '12px',
-        width: '90%',
-        maxWidth: '900px',
-        maxHeight: '90vh',
-        overflow: 'auto',
-        padding: '25px',
-        boxShadow: '0 10px 40px rgba(0,0,0,0.3)',
-        animation: 'slideIn 0.3s ease'
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0,0,0,0.9)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: '20px',
+        animation: 'fadeIn 0.3s ease'
       }}>
         <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '20px',
-          borderBottom: '1px solid #eee',
-          paddingBottom: '15px'
+          background: 'white',
+          borderRadius: '12px',
+          width: '90%',
+          maxWidth: '900px',
+          maxHeight: '90vh',
+          overflow: 'auto',
+          padding: '25px',
+          boxShadow: '0 10px 40px rgba(0,0,0,0.3)',
+          animation: 'slideIn 0.3s ease'
         }}>
-          <div>
-            <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <span style={{ color: '#3498db' }}>🔍</span>
-              Timeline Preview
-            </h2>
-            <div style={{ fontSize: '14px', color: '#666', marginTop: '5px' }}>
-              Showing {timelineClips.length} clips • Total duration: {formatTime(totalDuration)}
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '20px',
+            borderBottom: '1px solid #eee',
+            paddingBottom: '15px'
+          }}>
+            <div>
+              <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ color: '#3498db' }}>🔍</span>
+                Timeline Preview
+              </h2>
+              <div style={{ fontSize: '14px', color: '#666', marginTop: '5px' }}>
+                Showing {timelineClips.length} clips • Total duration: {formatTime(totalDuration)}
+              </div>
             </div>
+            <button
+              onClick={handleClose}
+              style={{
+                background: '#e74c3c',
+                color: 'white',
+                border: 'none',
+                padding: '10px 20px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+            >
+              <span>✕</span> Close
+            </button>
           </div>
-          <button
-            onClick={handleClose}
-            style={{
-              background: '#e74c3c',
-              color: 'white',
-              border: 'none',
-              padding: '10px 20px',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontWeight: 'bold',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px'
-            }}
-          >
-            <span>✕</span> Close
-          </button>
-        </div>
-        
-        {/* Preview Player */}
-        <div style={{ 
-          position: 'relative',
-          width: '100%',
-          aspectRatio: '16/9',
-          background: '#111',
-          borderRadius: '10px',
-          overflow: 'hidden',
-          marginBottom: '20px',
-          border: '3px solid #2c3e50'
-        }}>
-          {currentClip ? (
-            <>
-              {/* Media Display */}
+          
+          {/* Preview Player */}
+          <div style={{ 
+            position: 'relative',
+            width: '100%',
+            aspectRatio: '16/9',
+            background: '#111',
+            borderRadius: '10px',
+            overflow: 'hidden',
+            marginBottom: '20px',
+            border: '3px solid #2c3e50'
+          }}>
+            {currentClip ? (
+              <>
+                <div style={{
+                  width: '100%',
+                  height: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: currentClip.type.includes('image') ? '#000' : 'transparent'
+                }}>
+                  {currentClip.type.includes('video') ? (
+                    <video
+                      ref={videoRef}
+                      src={currentClip.url}
+                      key={currentClip.id}
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        objectFit: 'contain'
+                      }}
+                      muted={true}
+                      preload="auto"
+                      playsInline
+                      onLoadedData={() => {
+                        console.log('📹 Video loaded data');
+                        setIsVideoLoaded(true);
+                      }}
+                      onError={(e) => {
+                        console.error('❌ Video error:', e);
+                        setIsVideoLoaded(false);
+                      }}
+                    />
+                  ) : currentClip.type.includes('image') ? (
+                    <div style={{
+                      width: '100%',
+                      height: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      overflow: 'hidden'
+                    }}>
+                      <img
+                        key={currentClip.id}
+                        src={currentClip.url}
+                        alt="Preview"
+                        style={{
+                          maxWidth: '100%',
+                          maxHeight: '100%',
+                          objectFit: 'contain'
+                        }}
+                        onError={(e) => console.error("Image error:", e)}
+                      />
+                    </div>
+                  ) : (
+                    <div style={{
+                      width: '100%',
+                      height: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'white',
+                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      fontSize: '24px'
+                    }}>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '48px', marginBottom: '10px' }}>🎵</div>
+                        <div>Audio Clip</div>
+                        <div style={{ fontSize: '16px', opacity: 0.8 }}>{currentClip.name}</div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Text Overlay */}
+                  {currentClip.textOverlay?.enabled && currentClip.textOverlay.text && (
+                    <div style={{
+                      position: 'absolute',
+                      top: currentClip.textOverlay.y + '%',
+                      left: currentClip.textOverlay.x + '%',
+                      transform: 'translate(-50%, -50%)',
+                      fontSize: currentClip.textOverlay.fontSize + 'px',
+                      color: currentClip.textOverlay.fontColor,
+                      backgroundColor: currentClip.textOverlay.backgroundColor,
+                      padding: currentClip.textOverlay.backgroundColor === 'transparent' ? '0' : '8px 15px',
+                      borderRadius: '5px',
+                      textAlign: 'center',
+                      whiteSpace: 'nowrap',
+                      pointerEvents: 'none',
+                      border: currentClip.textOverlay.backgroundColor === 'transparent' ? 'none' : '1px solid rgba(0,0,0,0.2)',
+                      textShadow: '2px 2px 4px rgba(0,0,0,0.5)',
+                      zIndex: 10
+                    }}>
+                      {currentClip.textOverlay.text}
+                    </div>
+                  )}
+                </div>
+                
+                {/* Progress Bar Overlay */}
+                <div style={{
+                  position: 'absolute',
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  height: '4px',
+                  background: 'rgba(255,255,255,0.2)'
+                }}>
+                  <div style={{
+                    height: '100%',
+                    width: `${(currentTime / totalDuration) * 100}%`,
+                    background: 'linear-gradient(90deg, #3498db, #2ecc71)',
+                    transition: 'width 0.1s linear'
+                  }} />
+                </div>
+                
+                {/* Clip Info Overlay */}
+                <div style={{
+                  position: 'absolute',
+                  bottom: '10px',
+                  left: '10px',
+                  right: '10px',
+                  background: 'rgba(0,0,0,0.85)',
+                  color: 'white',
+                  padding: '12px 15px',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  backdropFilter: 'blur(5px)',
+                  border: '1px solid rgba(255,255,255,0.1)'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <div style={{
+                        background: currentClip.type.includes('video') ? '#e74c3c' : 
+                                   currentClip.type.includes('audio') ? '#9b59b6' : '#27ae60',
+                        color: 'white',
+                        width: '30px',
+                        height: '30px',
+                        borderRadius: '50%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontWeight: 'bold'
+                      }}>
+                        {safeClipIndex + 1}
+                      </div>
+                      <div>
+                        <strong style={{ fontSize: '16px' }}>{currentClip.name}</strong>
+                        {currentClip.textOverlay?.enabled && (
+                          <div style={{ 
+                            fontSize: '12px', 
+                            color: '#2ecc71',
+                            marginTop: '2px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '5px'
+                          }}>
+                            <span>📝</span> Text: "{currentClip.textOverlay.text}"
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{
+                      background: 'rgba(255,255,255,0.1)',
+                      padding: '5px 10px',
+                      borderRadius: '4px',
+                      fontSize: '12px'
+                    }}>
+                      {formatTime(currentTime)} / {formatTime(totalDuration)}
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Play/Pause Overlay */}
+                {!isPlaying && (
+                  <div
+                    onClick={handlePlayPause}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background: 'rgba(0,0,0,0.4)',
+                      cursor: 'pointer',
+                      opacity: 0.8,
+                      transition: 'opacity 0.2s'
+                    }}
+                  >
+                    <div style={{
+                      width: '80px',
+                      height: '80px',
+                      background: 'rgba(52, 152, 219, 0.9)',
+                      borderRadius: '50%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '36px',
+                      color: 'white'
+                    }}>
+                      ▶️
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
               <div style={{
                 width: '100%',
                 height: '100%',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                background: currentClip.type.includes('image') ? '#000' : 'transparent'
+                color: '#95a5a6',
+                fontSize: '18px'
               }}>
-                {currentClip.type.includes('video') ? (
-                  <video
-                    ref={videoRef}
-                    src={currentClip.url}
-                    style={{
-                      width: '100%',
-                      height: '100%',
-                      objectFit: 'contain'
-                    }}
-                    muted={true}
-                    preload="auto"
-                    playsInline
-                    onLoadedData={() => setIsVideoLoaded(true)}
-                    onError={() => setIsVideoLoaded(false)}
-                  />
-                ) : currentClip.type.includes('image') ? (
-                  <div style={{
-                    width: '100%',
-                    height: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    overflow: 'hidden'
-                  }}>
-                    <img
-                      key={currentClip.id}
-                      src={currentClip.url}
-                      alt="Preview"
-                      style={{
-                        maxWidth: '100%',
-                        maxHeight: '100%',
-                        objectFit: 'contain'
-                      }}
-                      onError={(e) => console.error("Image error:", e)}
-                    />
-                  </div>
-                ) : (
-                  <div style={{
-                    width: '100%',
-                    height: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: 'white',
-                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                    fontSize: '24px'
-                  }}>
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '48px', marginBottom: '10px' }}>🎵</div>
-                      <div>Audio Clip</div>
-                      <div style={{ fontSize: '16px', opacity: 0.8 }}>{currentClip.name}</div>
-                    </div>
-                  </div>
-                )}
-                
-                {/* Text Overlay */}
-                {currentClip.textOverlay?.enabled && currentClip.textOverlay.text && (
-                  <div style={{
-                    position: 'absolute',
-                    top: currentClip.textOverlay.y + '%',
-                    left: currentClip.textOverlay.x + '%',
-                    transform: 'translate(-50%, -50%)',
-                    fontSize: currentClip.textOverlay.fontSize + 'px',
-                    color: currentClip.textOverlay.fontColor,
-                    backgroundColor: currentClip.textOverlay.backgroundColor,
-                    padding: currentClip.textOverlay.backgroundColor === 'transparent' ? '0' : '8px 15px',
-                    borderRadius: '5px',
-                    textAlign: 'center',
-                    whiteSpace: 'nowrap',
-                    pointerEvents: 'none',
-                    border: currentClip.textOverlay.backgroundColor === 'transparent' ? 'none' : '1px solid rgba(0,0,0,0.2)',
-                    textShadow: '2px 2px 4px rgba(0,0,0,0.5)',
-                    zIndex: 10
-                  }}>
-                    {currentClip.textOverlay.text}
-                  </div>
-                )}
+                No clip selected
               </div>
-              
-              {/* Progress Bar Overlay */}
-              <div style={{
-                position: 'absolute',
-                bottom: 0,
-                left: 0,
-                right: 0,
-                height: '4px',
-                background: 'rgba(255,255,255,0.2)'
-              }}>
-                <div style={{
-                  height: '100%',
-                  width: `${(currentTime / totalDuration) * 100}%`,
-                  background: 'linear-gradient(90deg, #3498db, #2ecc71)',
-                  transition: 'width 0.1s linear'
-                }} />
-              </div>
-              
-              {/* Clip Info Overlay */}
-              <div style={{
-                position: 'absolute',
-                bottom: '10px',
-                left: '10px',
-                right: '10px',
-                background: 'rgba(0,0,0,0.85)',
-                color: 'white',
-                padding: '12px 15px',
-                borderRadius: '8px',
-                fontSize: '14px',
-                backdropFilter: 'blur(5px)',
-                border: '1px solid rgba(255,255,255,0.1)'
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div style={{
-                      background: currentClip.type.includes('video') ? '#e74c3c' : 
-                                 currentClip.type.includes('audio') ? '#9b59b6' : '#27ae60',
-                      color: 'white',
-                      width: '30px',
-                      height: '30px',
-                      borderRadius: '50%',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontWeight: 'bold'
-                    }}>
-                      {safeClipIndex + 1}
-                    </div>
-                    <div>
-                      <strong style={{ fontSize: '16px' }}>{currentClip.name}</strong>
-                      {currentClip.textOverlay?.enabled && (
-                        <div style={{ 
-                          fontSize: '12px', 
-                          color: '#2ecc71',
-                          marginTop: '2px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '5px'
-                        }}>
-                          <span>📝</span> Text: "{currentClip.textOverlay.text}"
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div style={{
-                    background: 'rgba(255,255,255,0.1)',
-                    padding: '5px 10px',
-                    borderRadius: '4px',
-                    fontSize: '12px'
-                  }}>
-                    {formatTime(currentTime)} / {formatTime(totalDuration)}
-                  </div>
-                </div>
-              </div>
-              
-              {/* Play/Pause Overlay */}
-              {!isPlaying && (
-                <div
-                  onClick={handlePlayPause}
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    background: 'rgba(0,0,0,0.4)',
-                    cursor: 'pointer',
-                    opacity: 0.8,
-                    transition: 'opacity 0.2s'
-                  }}
-                >
-                  <div style={{
-                    width: '80px',
-                    height: '80px',
-                    background: 'rgba(52, 152, 219, 0.9)',
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '36px',
-                    color: 'white'
-                  }}>
-                    ▶️
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <div style={{
-              width: '100%',
-              height: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#95a5a6',
-              fontSize: '18px'
-            }}>
-              No clip selected
-            </div>
-          )}
-        </div>
-        
-        {/* Controls */}
-        <div style={{
-          background: '#f8f9fa',
-          padding: '20px',
-          borderRadius: '10px',
-          marginBottom: '20px',
-          border: '1px solid #e9ecef'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-            <button
-              onClick={handlePlayPause}
-              style={{
-                background: isPlaying ? '#e74c3c' : '#27ae60',
-                color: 'white',
-                border: 'none',
-                padding: '12px 25px',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontWeight: 'bold',
-                fontSize: '16px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                minWidth: '120px'
-              }}
-            >
-              {isPlaying ? (
-                <>
-                  <span>⏸️</span> Pause
-                </>
-              ) : (
-                <>
-                  <span>▶️</span> Play
-                </>
-              )}
-            </button>
-            
-            <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <span style={{ fontSize: '14px', color: '#666' }}>
-                  Clip {safeClipIndex + 1} of {timelineClips.length}
-                </span>
-                <span style={{ fontSize: '14px', color: '#666', fontWeight: 'bold' }}>
-                  {currentTime.toFixed(1)}s / {totalDuration.toFixed(1)}s
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max={totalDuration}
-                step="0.1"
-                value={currentTime}
-                onChange={handleTimelineChange}
+            )}
+          </div>
+          
+          {/* Controls */}
+          <div style={{
+            background: '#f8f9fa',
+            padding: '20px',
+            borderRadius: '10px',
+            marginBottom: '20px',
+            border: '1px solid #e9ecef'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+              <button
+                onClick={handlePlayPause}
                 style={{
-                  width: '100%',
-                  height: '8px',
-                  borderRadius: '4px',
-                  background: 'linear-gradient(90deg, #3498db 0%, #3498db ' + (currentTime / totalDuration * 100) + '%, #e0e0e0 ' + (currentTime / totalDuration * 100) + '%, #e0e0e0 100%)',
+                  background: isPlaying ? '#e74c3c' : '#27ae60',
+                  color: 'white',
+                  border: 'none',
+                  padding: '12px 25px',
+                  borderRadius: '6px',
                   cursor: 'pointer',
-                  WebkitAppearance: 'none'
+                  fontWeight: 'bold',
+                  fontSize: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  minWidth: '120px'
                 }}
-              />
+              >
+                {isPlaying ? (
+                  <>
+                    <span>⏸️</span> Pause
+                  </>
+                ) : (
+                  <>
+                    <span>▶️</span> Play
+                  </>
+                )}
+              </button>
+              
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '14px', color: '#666' }}>
+                    Clip {safeClipIndex + 1} of {timelineClips.length}
+                  </span>
+                  <span style={{ fontSize: '14px', color: '#666', fontWeight: 'bold' }}>
+                    {currentTime.toFixed(1)}s / {totalDuration.toFixed(1)}s
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max={totalDuration}
+                  step="0.1"
+                  value={currentTime}
+                  onChange={handleTimelineChange}
+                  style={{
+                    width: '100%',
+                    height: '8px',
+                    borderRadius: '4px',
+                    background: 'linear-gradient(90deg, #3498db 0%, #3498db ' + (currentTime / totalDuration * 100) + '%, #e0e0e0 ' + (currentTime / totalDuration * 100) + '%, #e0e0e0 100%)',
+                    cursor: 'pointer',
+                    WebkitAppearance: 'none'
+                  }}
+                />
+              </div>
             </div>
           </div>
-        </div>
-        
-        {/* Timeline Overview */}
-        <div style={{
-          background: '#fff',
-          border: '1px solid #e9ecef',
-          borderRadius: '10px',
-          padding: '20px'
-        }}>
-          <h4 style={{ 
-            marginTop: 0, 
-            marginBottom: '15px',
-            color: '#2c3e50',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px'
+          
+          {/* Timeline Overview */}
+          <div style={{
+            background: '#fff',
+            border: '1px solid #e9ecef',
+            borderRadius: '10px',
+            padding: '20px'
           }}>
-            <span>📋</span> Timeline Overview
-          </h4>
-          <div style={{ 
-            display: 'flex', 
-            overflowX: 'auto', 
-            padding: '10px 0',
-            gap: '4px'
-          }}>
-            {timelineClips.map((clip, index) => {
-              const duration = clip.end - clip.start;
-              const clipStart = timelineClips.slice(0, index).reduce((sum, c) => sum + (c.end - c.start), 0);
-              const widthPercent = (duration / totalDuration) * 100;
-              
-              return (
-                <div
-                  key={clip.id}
-                  onClick={() => handleClipClick(index)}
-                  style={{
-                    flex: `0 0 ${Math.max(widthPercent, 10)}%`,
-                    minWidth: '80px',
-                    background: index === safeClipIndex ? '#3498db' : 
-                               (clip.textOverlay?.enabled ? '#e8f6f3' : '#ecf0f1'),
-                    border: index === safeClipIndex ? '3px solid #2980b9' : '1px solid #ddd',
-                    borderRadius: '6px',
-                    padding: '12px',
-                    cursor: 'pointer',
-                    position: 'relative',
-                    transition: 'all 0.2s ease',
-                    ':hover': {
-                      transform: 'translateY(-2px)',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-                    }
-                  }}
-                >
-                  <div style={{
-                    fontSize: '13px',
-                    fontWeight: 'bold',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    marginBottom: '5px',
-                    color: index === safeClipIndex ? 'white' : '#2c3e50'
-                  }}>
-                    {index + 1}. {clip.name}
-                  </div>
-                  <div style={{ 
-                    fontSize: '11px', 
-                    color: index === safeClipIndex ? 'rgba(255,255,255,0.9)' : '#666'
-                  }}>
-                    {duration.toFixed(1)}s
-                  </div>
-                  
-                  {/* Clip type indicator */}
-                  <div style={{
-                    position: 'absolute',
-                    top: '8px',
-                    right: '8px',
-                    fontSize: '12px'
-                  }}>
-                    {clip.type.includes('video') ? '🎬' : 
-                     clip.type.includes('audio') ? '🎵' : '🖼️'}
-                  </div>
-                  
-                  {/* Text overlay indicator */}
-                  {clip.textOverlay?.enabled && (
+            <h4 style={{ 
+              marginTop: 0, 
+              marginBottom: '15px',
+              color: '#2c3e50',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px'
+            }}>
+              <span>📋</span> Timeline Overview
+            </h4>
+            <div style={{ 
+              display: 'flex', 
+              overflowX: 'auto', 
+              padding: '10px 0',
+              gap: '4px'
+            }}>
+              {timelineClips.map((clip, index) => {
+                const duration = clip.end - clip.start;
+                const clipStart = timelineClips.slice(0, index).reduce((sum, c) => sum + (c.end - c.start), 0);
+                const widthPercent = (duration / totalDuration) * 100;
+                
+                return (
+                  <div
+                    key={clip.id}
+                    onClick={() => handleClipClick(index)}
+                    style={{
+                      flex: `0 0 ${Math.max(widthPercent, 10)}%`,
+                      minWidth: '80px',
+                      background: index === safeClipIndex ? '#3498db' : 
+                                 (clip.textOverlay?.enabled ? '#e8f6f3' : '#ecf0f1'),
+                      border: index === safeClipIndex ? '3px solid #2980b9' : '1px solid #ddd',
+                      borderRadius: '6px',
+                      padding: '12px',
+                      cursor: 'pointer',
+                      position: 'relative',
+                      transition: 'all 0.2s ease',
+                      ':hover': {
+                        transform: 'translateY(-2px)',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+                      }
+                    }}
+                  >
+                    <div style={{
+                      fontSize: '13px',
+                      fontWeight: 'bold',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      marginBottom: '5px',
+                      color: index === safeClipIndex ? 'white' : '#2c3e50'
+                    }}>
+                      {index + 1}. {clip.name}
+                    </div>
+                    <div style={{ 
+                      fontSize: '11px', 
+                      color: index === safeClipIndex ? 'rgba(255,255,255,0.9)' : '#666'
+                    }}>
+                      {duration.toFixed(1)}s
+                    </div>
+                    
+                    {/* Clip type indicator */}
                     <div style={{
                       position: 'absolute',
-                      bottom: '8px',
+                      top: '8px',
                       right: '8px',
-                      background: '#27ae60',
-                      color: 'white',
-                      fontSize: '9px',
-                      padding: '2px 6px',
-                      borderRadius: '3px',
-                      fontWeight: 'bold'
+                      fontSize: '12px'
                     }}>
-                      TEXT
+                      {clip.type.includes('video') ? '🎬' : 
+                       clip.type.includes('audio') ? '🎵' : '🖼️'}
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                    
+                    {/* Text overlay indicator */}
+                    {clip.textOverlay?.enabled && (
+                      <div style={{
+                        position: 'absolute',
+                        bottom: '8px',
+                        right: '8px',
+                        background: '#27ae60',
+                        color: 'white',
+                        fontSize: '9px',
+                        padding: '2px 6px',
+                        borderRadius: '3px',
+                        fontWeight: 'bold'
+                      }}>
+                        TEXT
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
-    </div>
-  );
-};
+    );
+  };
+
   // REAL UPLOAD TO SERVER
   const handleUpload = async (files) => {
     if (!files || files.length === 0) return;
@@ -724,60 +717,61 @@ function App() {
           url: `${API_BASE}${file.path}`,
           serverPath: file.path,
           type: file.type,
-          duration: file.type.includes('video') ? 10 : 3,
+          duration: file.type.includes('video') ? 10 : 
+                   file.type.includes('audio') ? 5 : 3,
         }));
         
         setMediaFiles(prev => [...prev, ...newFiles]);
-        alert(`Uploaded ${newFiles.length} file(s) to server!`);
+        alert(`✅ Uploaded ${newFiles.length} file(s) successfully!`);
+        
+        // Auto-add first file to timeline for convenience
+        if (newFiles.length > 0 && timelineClips.length === 0) {
+          addToTimeline(newFiles[0]);
+        }
       }
     } catch (error) {
-      alert('Upload failed: ' + error.message);
+      console.error('Upload error:', error);
+      alert(`❌ Upload failed: ${error.message}\n\nMake sure the server is running.`);
     } finally {
       setUploading(false);
     }
   };
 
-  // Updated: Add file to timeline with automatic start time
-   const addToTimeline = (file) => {
-  // Calculate total duration so far for auto-start time
-  const totalDurationSoFar = timelineClips.reduce((sum, clip) => sum + (clip.end - clip.start), 0);
-  
-  const defaultDuration = file.type.includes('video') ? 5 : 3; // Default durations
-  
-  // Create a more robust clip with guaranteed unique ID
-  const newClip = {
-    id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-    name: file.name,
-    url: file.url,
-    type: file.type,
-    start: totalDurationSoFar,
-    end: totalDurationSoFar + defaultDuration,
-    // Add text overlay properties
-    textOverlay: {
-      enabled: false,
-      text: '',
-      fontSize: 24,
-      fontColor: '#FFFFFF',
-      position: 'center',
-      backgroundColor: 'transparent',
-      x: 50,
-      y: 50
-    }
+  // Add file to timeline
+  const addToTimeline = (file) => {
+    const totalDurationSoFar = timelineClips.reduce((sum, clip) => sum + (clip.end - clip.start), 0);
+    
+    const defaultDuration = file.type.includes('video') ? 5 : 3;
+    
+    const newClip = {
+      id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      name: file.name,
+      url: file.url,
+      type: file.type,
+      start: totalDurationSoFar,
+      end: totalDurationSoFar + defaultDuration,
+      textOverlay: {
+        enabled: false,
+        text: '',
+        fontSize: 24,
+        fontColor: '#FFFFFF',
+        position: 'center',
+        backgroundColor: 'transparent',
+        x: 50,
+        y: 50
+      }
+    };
+    
+    console.log('Adding clip to timeline:', newClip);
+    
+    setTimelineClips(prev => {
+      const updated = [...prev, newClip];
+      console.log('Updated timeline clips:', updated);
+      return updated;
+    });
+    
+    setSelectedClip(newClip);
   };
-  
-  console.log('Adding clip to timeline:', newClip);
-  
-  // Update timeline clips
-  setTimelineClips(prev => {
-    const updated = [...prev, newClip];
-    console.log('Updated timeline clips:', updated);
-    return updated;
-  });
-  
-  // Select the newly added clip
-  setSelectedClip(newClip);
-};
-
 
   // Simple timeline controls
   const moveClip = (clipId, direction) => {
@@ -794,84 +788,138 @@ function App() {
     }
   };
 
-  // Updated export function with better messaging
+  // Export function
   const exportVideo = async () => {
-  if (timelineClips.length === 0) {
-    alert("Add some clips to timeline first!");
-    return;
-  }
-  
-  setExporting(true);
-  
-  try {
-    const totalDuration = timelineClips.reduce((sum, clip) => sum + (clip.end - clip.start), 0);
-    const textClipsCount = timelineClips.filter(clip => clip.textOverlay?.enabled && clip.textOverlay.text).length;
-    
-    alert(`🎬 Starting Video Export 🎬
-
-Your timeline (${timelineClips.length} clips, ${totalDuration.toFixed(1)}s total)
-${textClipsCount > 0 ? `Text overlays: ${textClipsCount}` : ''}
-
-Creating MP4 file...`);
-
-    // Call the new export-video endpoint
-    const response = await fetch(`${API_BASE}/api/export-video`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        clips: timelineClips.map(clip => ({
-          url: clip.url,
-          name: clip.name,
-          type: clip.type,
-          start: clip.start,
-          end: clip.end,
-          textOverlay: clip.textOverlay
-        })),
-        projectName: `video-${Date.now()}`
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Server error: ${response.status}`);
+    if (timelineClips.length === 0) {
+      alert("Add some clips to timeline first!");
+      return;
     }
+    
+    // Show detailed summary
+    const videoClips = timelineClips.filter(c => c.type.includes('video')).length;
+    const imageClips = timelineClips.filter(c => c.type.includes('image')).length;
+    const audioClips = timelineClips.filter(c => c.type.includes('audio')).length;
+    const textClips = timelineClips.filter(c => c.textOverlay?.enabled && c.textOverlay.text).length;
+    const totalDuration = timelineClips.reduce((sum, clip) => sum + (clip.end - clip.start), 0);
+    
+    const proceed = window.confirm(`🎬 VIDEO EXPORT SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Total Clips: ${timelineClips.length}
+• Videos: ${videoClips}
+• Images: ${imageClips}
+• Audio: ${audioClips}
+• Text Overlays: ${textClips}
+• Total Duration: ${totalDuration.toFixed(1)}s
+━━━━━━━━━━━━━━━━━━━━━━━━━
+This will create a video with all your clips,
+including text overlays and audio.
 
-    // Download the file
-    const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `video-${Date.now()}.mp4`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
+Click OK to start export (may take a while)...`);
+    
+    if (!proceed) return;
+    
+    setExporting(true);
+    
+    try {
+      console.log('📤 Sending export request:', timelineClips);
+      
+      const response = await fetch(`${API_BASE}/api/export-video`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          clips: timelineClips.map(clip => ({
+            url: clip.url,
+            name: clip.name,
+            type: clip.type,
+            start: clip.start,
+            end: clip.end,
+            textOverlay: clip.textOverlay
+          })),
+          projectName: `video-${Date.now()}`
+        }),
+      });
 
-    alert(`✅ MP4 file downloaded!
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Server error (${response.status}): ${errorText}`);
+      }
 
-The file contains instructions for creating your video using FFmpeg.
-To create the actual MP4:
+      // Get filename from response headers or use default
+      const contentDisposition = response.headers.get('content-disposition');
+      let filename = `video-export-${Date.now()}.mp4`;
+      
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="(.+)"/);
+        if (match) filename = match[1];
+      }
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
 
-1. Extract the downloaded file
-2. Follow the instructions inside
-3. Run the FFmpeg commands
-4. You'll get your final video!`);
+      alert(`✅ Video exported successfully!
+━━━━━━━━━━━━━━━━━━━━━━━━━
+File: ${filename}
+Size: ${(blob.size / 1024 / 1024).toFixed(2)} MB
+Clips: ${timelineClips.length}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Your download should start automatically.`);
+      
+    } catch (error) {
+      console.error('❌ Export error:', error);
+      
+      alert(`❌ Export failed!
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Error: ${error.message}
 
-  } catch (error) {
-    console.error('Export error:', error);
-    alert(`Export failed: ${error.message}`);
-  } finally {
-    setExporting(false);
-  }
-};
+Possible issues:
+1. Server is not running
+2. Uploaded files are missing
+3. FFmpeg processing error
+
+Check browser console for details.`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // Debug function to check server files
+  const debugServerFiles = async () => {
+    try {
+      console.log('🔍 Checking server files...');
+      const response = await fetch(`${API_BASE}/api/debug-uploads`);
+      const data = await response.json();
+      
+      console.log('📁 Server files:', data);
+      
+      alert(`📊 Server File Status:
+• Total files on server: ${data.count}
+• Files: ${data.files.map(f => `\n  - ${f.name} (${f.size} bytes)`).join('')}
+
+• Timeline clips: ${timelineClips.length}
+• Timeline files: ${timelineClips.map(c => `\n  - ${c.name} → ${c.url.split('/').pop()}`).join('')}
+
+Check browser console for full details.`);
+      
+    } catch (error) {
+      alert('Debug failed: ' + error.message);
+    }
+  };
 
   // Test server connection
   const testServerConnection = async () => {
     try {
       const response = await fetch(`${API_BASE}/api/test`);
       const data = await response.json();
-      alert(`✅ Server is running!\n\nMessage: ${data.message}\nFFmpeg: ${data.ffmpeg}\n\nEndpoints:\n- ${data.endpoints.join('\n- ')}`);
+      alert(`✅ Server is running!\n\nMessage: ${data.message}\n\nEndpoints:\n- ${data.endpoints.join('\n- ')}`);
     } catch (error) {
       alert('❌ Server not reachable!\n\nMake sure server is running:\n1. Open terminal in /server folder\n2. Run: node index.js\n3. Wait for "✅ Server running at http://localhost:5000"');
     }
@@ -894,6 +942,25 @@ To create the actual MP4:
       }}>
         <h1 style={{ margin: 0 }}>🎬 SIMPLE VIDEO EDITOR</h1>
         <p style={{ margin: '5px 0 0 0', opacity: 0.8 }}>Upload, Arrange, Export</p>
+        
+        {/* DEBUG BUTTON */}
+        <button 
+          onClick={debugServerFiles}
+          style={{
+            position: 'absolute',
+            top: '10px',
+            right: '120px',
+            background: '#9b59b6',
+            color: 'white',
+            border: 'none',
+            padding: '5px 10px',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '12px'
+          }}
+        >
+          Debug Files
+        </button>
         
         {/* SERVER TEST BUTTON */}
         <button 
@@ -923,14 +990,28 @@ To create the actual MP4:
         backgroundColor: '#f5f5f5'
       }}>
         
-        {/* LEFT: MEDIA LIBRARY - SIMPLE */}
+        {/* LEFT: MEDIA LIBRARY */}
         <div style={{ 
           width: '250px', 
           padding: '15px',
           borderRight: '2px solid #ddd',
           overflowY: 'auto'
         }}>
-          <h3 style={{ marginTop: 0 }}>📁 Media Files</h3>
+          <h3 style={{ marginTop: 0 }}>
+            📁 Media Files 
+            {mediaFiles.length > 0 && (
+              <span style={{ 
+                fontSize: '14px', 
+                color: '#3498db',
+                marginLeft: '10px',
+                background: '#ecf0f1',
+                padding: '2px 8px',
+                borderRadius: '10px'
+              }}>
+                {mediaFiles.length} loaded
+              </span>
+            )}
+          </h3>
           
           {/* UPLOAD BUTTON */}
           <div 
@@ -1018,7 +1099,7 @@ To create the actual MP4:
           </div>
         </div>
 
-        {/* CENTER: PREVIEW & TIMELINE - SIMPLE */}
+        {/* CENTER: PREVIEW & TIMELINE */}
         <div style={{ 
           flex: 1, 
           padding: '15px',
@@ -1072,7 +1153,6 @@ To create the actual MP4:
               </div>
             ) : timelineClips.length > 0 ? (
               <div>
-                {/* Show first clip if no clip is selected */}
                 {timelineClips[0].type.includes('video') ? (
                   <video 
                     controls 
@@ -1119,7 +1199,7 @@ To create the actual MP4:
             )}
           </div>
 
-          {/* TIMELINE - SIMPLE */}
+          {/* TIMELINE */}
           <div style={{ 
             flex: 1,
             background: '#fff',
@@ -1139,7 +1219,7 @@ To create the actual MP4:
                   {timelineClips.length} clip{timelineClips.length !== 1 ? 's' : ''}
                 </span>
 
-                {/* ADD PREVIEW BUTTON HERE */}
+                {/* PREVIEW BUTTON */}
                 <button
                   onClick={() => {
                     if (timelineClips.length === 0) {
@@ -1164,6 +1244,7 @@ To create the actual MP4:
                   🔍 Preview Timeline
                 </button>
 
+                {/* EXPORT BUTTON */}
                 <button
                   onClick={exportVideo}
                   disabled={exporting}
@@ -1344,197 +1425,91 @@ To create the actual MP4:
           </div>
         </div>
 
-        {/* RIGHT: PROPERTIES - SIMPLE */}
-<div style={{ 
-  width: '250px', 
-  padding: '15px',
-  borderLeft: '2px solid #ddd',
-  overflowY: 'auto',
-  background: '#fff'
-}}>
-  <h3 style={{ marginTop: 0 }}>⚙️ Properties</h3>
-  
-  {selectedClip ? (
-    <div>
-      <div style={{ 
-        padding: '10px', 
-        background: '#f8f9fa',
-        borderRadius: '5px',
-        marginBottom: '15px'
-      }}>
-        <strong>Selected:</strong> {selectedClip.name}
-        <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
-          Position: {timelineClips.findIndex(c => c.id === selectedClip.id) + 1} of {timelineClips.length}
-        </div>
-      </div>
-      
-      {/* BASIC PROPERTIES */}
-      <div style={{ marginBottom: '20px', borderBottom: '1px solid #eee', paddingBottom: '15px' }}>
-        <h4 style={{ marginTop: 0, fontSize: '16px' }}>📏 Clip Timing</h4>
-        
-        <div style={{ marginBottom: '15px' }}>
-          <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px' }}>
-            Start Time (auto-calculated):
-            <div style={{
-              width: '100%',
-              padding: '8px',
-              marginTop: '5px',
-              borderRadius: '4px',
-              border: '1px solid #ddd',
-              background: '#f5f5f5',
-              color: '#666'
-            }}>
-              {selectedClip.start.toFixed(1)} seconds
-            </div>
-          </label>
-        </div>
-        
-        <div style={{ marginBottom: '15px' }}>
-          <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px' }}>
-            Clip Duration (seconds):
-            <input
-              type="number"
-              min="0.1"
-              step="0.1"
-              value={(selectedClip.end - selectedClip.start).toFixed(1)}
-              onChange={(e) => {
-                const newDuration = parseFloat(e.target.value) || 1;
-                const newEnd = selectedClip.start + newDuration;
-                
-                setSelectedClip({...selectedClip, end: newEnd});
-                setTimelineClips(prev => prev.map(c => 
-                  c.id === selectedClip.id ? {...c, end: newEnd} : c
-                ));
-              }}
-              style={{
-                width: '100%',
-                padding: '8px',
-                marginTop: '5px',
-                borderRadius: '4px',
-                border: '1px solid #ddd'
-              }}
-            />
-          </label>
-        </div>
-      </div>
-      
-      {/* TEXT OVERLAY SECTION */}
-      <div style={{ marginBottom: '20px', borderBottom: '1px solid #eee', paddingBottom: '15px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-          <h4 style={{ marginTop: 0, fontSize: '16px' }}>🖋️ Text Overlay</h4>
-          <button
-            onClick={() => {
-              const updatedClip = {
-                ...selectedClip,
-                textOverlay: {
-                  ...selectedClip.textOverlay,
-                  enabled: !selectedClip.textOverlay.enabled
-                }
-              };
-              setSelectedClip(updatedClip);
-              setTimelineClips(prev => prev.map(c => 
-                c.id === selectedClip.id ? updatedClip : c
-              ));
-            }}
-            style={{
-              background: selectedClip.textOverlay?.enabled ? '#27ae60' : '#95a5a6',
-              color: 'white',
-              border: 'none',
-              padding: '5px 10px',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '12px'
-            }}
-          >
-            {selectedClip.textOverlay?.enabled ? 'ON ✓' : 'OFF'}
-          </button>
-        </div>
-        
-        {selectedClip.textOverlay?.enabled && (
-          <div style={{ 
-            padding: '10px', 
-            background: '#f0f8ff',
-            borderRadius: '5px',
-            border: '1px solid #cce7ff'
-          }}>
-            <div style={{ marginBottom: '10px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                Text:
-                <textarea
-                  value={selectedClip.textOverlay.text}
-                  onChange={(e) => {
-                    const updatedClip = {
-                      ...selectedClip,
-                      textOverlay: {
-                        ...selectedClip.textOverlay,
-                        text: e.target.value
-                      }
-                    };
-                    setSelectedClip(updatedClip);
-                    setTimelineClips(prev => prev.map(c => 
-                      c.id === selectedClip.id ? updatedClip : c
-                    ));
-                  }}
-                  placeholder="Enter text to overlay"
-                  rows="3"
-                  style={{
-                    width: '100%',
-                    padding: '8px',
-                    marginTop: '5px',
-                    borderRadius: '4px',
-                    border: '1px solid #ddd',
-                    resize: 'vertical',
-                    fontFamily: 'Arial, sans-serif'
-                  }}
-                />
-              </label>
-            </div>
-            
-            <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', marginBottom: '5px', fontSize: '12px' }}>
-                  Font Size:
-                  <input
-                    type="number"
-                    min="10"
-                    max="100"
-                    value={selectedClip.textOverlay.fontSize}
-                    onChange={(e) => {
-                      const updatedClip = {
-                        ...selectedClip,
-                        textOverlay: {
-                          ...selectedClip.textOverlay,
-                          fontSize: parseInt(e.target.value)
-                        }
-                      };
-                      setSelectedClip(updatedClip);
-                      setTimelineClips(prev => prev.map(c => 
-                        c.id === selectedClip.id ? updatedClip : c
-                      ));
-                    }}
-                    style={{
-                      width: '100%',
-                      padding: '5px',
-                      marginTop: '3px',
-                      borderRadius: '4px',
-                      border: '1px solid #ddd'
-                    }}
-                  />
-                </label>
+        {/* RIGHT: PROPERTIES */}
+        <div style={{ 
+          width: '250px', 
+          padding: '15px',
+          borderLeft: '2px solid #ddd',
+          overflowY: 'auto',
+          background: '#fff'
+        }}>
+          <h3 style={{ marginTop: 0 }}>⚙️ Properties</h3>
+          
+          {selectedClip ? (
+            <div>
+              <div style={{ 
+                padding: '10px', 
+                background: '#f8f9fa',
+                borderRadius: '5px',
+                marginBottom: '15px'
+              }}>
+                <strong>Selected:</strong> {selectedClip.name}
+                <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
+                  Position: {timelineClips.findIndex(c => c.id === selectedClip.id) + 1} of {timelineClips.length}
+                </div>
               </div>
               
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', marginBottom: '5px', fontSize: '12px' }}>
-                  Color:
-                  <input
-                    type="color"
-                    value={selectedClip.textOverlay.fontColor}
-                    onChange={(e) => {
+              {/* BASIC PROPERTIES */}
+              <div style={{ marginBottom: '20px', borderBottom: '1px solid #eee', paddingBottom: '15px' }}>
+                <h4 style={{ marginTop: 0, fontSize: '16px' }}>📏 Clip Timing</h4>
+                
+                <div style={{ marginBottom: '15px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px' }}>
+                    Start Time (auto-calculated):
+                    <div style={{
+                      width: '100%',
+                      padding: '8px',
+                      marginTop: '5px',
+                      borderRadius: '4px',
+                      border: '1px solid #ddd',
+                      background: '#f5f5f5',
+                      color: '#666'
+                    }}>
+                      {selectedClip.start.toFixed(1)} seconds
+                    </div>
+                  </label>
+                </div>
+                
+                <div style={{ marginBottom: '15px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px' }}>
+                    Clip Duration (seconds):
+                    <input
+                      type="number"
+                      min="0.1"
+                      step="0.1"
+                      value={(selectedClip.end - selectedClip.start).toFixed(1)}
+                      onChange={(e) => {
+                        const newDuration = parseFloat(e.target.value) || 1;
+                        const newEnd = selectedClip.start + newDuration;
+                        
+                        setSelectedClip({...selectedClip, end: newEnd});
+                        setTimelineClips(prev => prev.map(c => 
+                          c.id === selectedClip.id ? {...c, end: newEnd} : c
+                        ));
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '8px',
+                        marginTop: '5px',
+                        borderRadius: '4px',
+                        border: '1px solid #ddd'
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
+              
+              {/* TEXT OVERLAY SECTION */}
+              <div style={{ marginBottom: '20px', borderBottom: '1px solid #eee', paddingBottom: '15px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <h4 style={{ marginTop: 0, fontSize: '16px' }}>🖋️ Text Overlay</h4>
+                  <button
+                    onClick={() => {
                       const updatedClip = {
                         ...selectedClip,
                         textOverlay: {
                           ...selectedClip.textOverlay,
-                          fontColor: e.target.value
+                          enabled: !selectedClip.textOverlay.enabled
                         }
                       };
                       setSelectedClip(updatedClip);
@@ -1543,130 +1518,236 @@ To create the actual MP4:
                       ));
                     }}
                     style={{
-                      width: '100%',
-                      height: '30px',
-                      marginTop: '3px',
+                      background: selectedClip.textOverlay?.enabled ? '#27ae60' : '#95a5a6',
+                      color: 'white',
+                      border: 'none',
+                      padding: '5px 10px',
                       borderRadius: '4px',
-                      border: '1px solid #ddd'
+                      cursor: 'pointer',
+                      fontSize: '12px'
                     }}
-                  />
-                </label>
+                  >
+                    {selectedClip.textOverlay?.enabled ? 'ON ✓' : 'OFF'}
+                  </button>
+                </div>
+                
+                {selectedClip.textOverlay?.enabled && (
+                  <div style={{ 
+                    padding: '10px', 
+                    background: '#f0f8ff',
+                    borderRadius: '5px',
+                    border: '1px solid #cce7ff'
+                  }}>
+                    <div style={{ marginBottom: '10px' }}>
+                      <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
+                        Text:
+                        <textarea
+                          value={selectedClip.textOverlay.text}
+                          onChange={(e) => {
+                            const updatedClip = {
+                              ...selectedClip,
+                              textOverlay: {
+                                ...selectedClip.textOverlay,
+                                text: e.target.value
+                              }
+                            };
+                            setSelectedClip(updatedClip);
+                            setTimelineClips(prev => prev.map(c => 
+                              c.id === selectedClip.id ? updatedClip : c
+                            ));
+                          }}
+                          placeholder="Enter text to overlay"
+                          rows="3"
+                          style={{
+                            width: '100%',
+                            padding: '8px',
+                            marginTop: '5px',
+                            borderRadius: '4px',
+                            border: '1px solid #ddd',
+                            resize: 'vertical',
+                            fontFamily: 'Arial, sans-serif'
+                          }}
+                        />
+                      </label>
+                    </div>
+                    
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                      <div style={{ flex: 1 }}>
+                        <label style={{ display: 'block', marginBottom: '5px', fontSize: '12px' }}>
+                          Font Size:
+                          <input
+                            type="number"
+                            min="10"
+                            max="100"
+                            value={selectedClip.textOverlay.fontSize}
+                            onChange={(e) => {
+                              const updatedClip = {
+                                ...selectedClip,
+                                textOverlay: {
+                                  ...selectedClip.textOverlay,
+                                  fontSize: parseInt(e.target.value)
+                                }
+                              };
+                              setSelectedClip(updatedClip);
+                              setTimelineClips(prev => prev.map(c => 
+                                c.id === selectedClip.id ? updatedClip : c
+                              ));
+                            }}
+                            style={{
+                              width: '100%',
+                              padding: '5px',
+                              marginTop: '3px',
+                              borderRadius: '4px',
+                              border: '1px solid #ddd'
+                            }}
+                          />
+                        </label>
+                      </div>
+                      
+                      <div style={{ flex: 1 }}>
+                        <label style={{ display: 'block', marginBottom: '5px', fontSize: '12px' }}>
+                          Color:
+                          <input
+                            type="color"
+                            value={selectedClip.textOverlay.fontColor}
+                            onChange={(e) => {
+                              const updatedClip = {
+                                ...selectedClip,
+                                textOverlay: {
+                                  ...selectedClip.textOverlay,
+                                  fontColor: e.target.value
+                                }
+                              };
+                              setSelectedClip(updatedClip);
+                              setTimelineClips(prev => prev.map(c => 
+                                c.id === selectedClip.id ? updatedClip : c
+                              ));
+                            }}
+                            style={{
+                              width: '100%',
+                              height: '30px',
+                              marginTop: '3px',
+                              borderRadius: '4px',
+                              border: '1px solid #ddd'
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                    
+                    <div style={{ marginBottom: '10px' }}>
+                      <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
+                        Position:
+                        <select
+                          value={selectedClip.textOverlay.position}
+                          onChange={(e) => {
+                            let x, y;
+                            switch(e.target.value) {
+                              case 'top-left': x = 10; y = 10; break;
+                              case 'top-center': x = 50; y = 10; break;
+                              case 'top-right': x = 90; y = 10; break;
+                              case 'center': x = 50; y = 50; break;
+                              case 'bottom-left': x = 10; y = 90; break;
+                              case 'bottom-center': x = 50; y = 90; break;
+                              case 'bottom-right': x = 90; y = 90; break;
+                              default: x = 50; y = 50;
+                            }
+                            
+                            const updatedClip = {
+                              ...selectedClip,
+                              textOverlay: {
+                                ...selectedClip.textOverlay,
+                                position: e.target.value,
+                                x, y
+                              }
+                            };
+                            setSelectedClip(updatedClip);
+                            setTimelineClips(prev => prev.map(c => 
+                              c.id === selectedClip.id ? updatedClip : c
+                            ));
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '5px',
+                            marginTop: '5px',
+                            borderRadius: '4px',
+                            border: '1px solid #ddd'
+                          }}
+                        >
+                          <option value="top-left">Top Left</option>
+                          <option value="top-center">Top Center</option>
+                          <option value="top-right">Top Right</option>
+                          <option value="center">Center</option>
+                          <option value="bottom-left">Bottom Left</option>
+                          <option value="bottom-center">Bottom Center</option>
+                          <option value="bottom-right">Bottom Right</option>
+                        </select>
+                      </label>
+                    </div>
+                    
+                    <div style={{ marginBottom: '10px' }}>
+                      <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
+                        Background:
+                        <select
+                          value={selectedClip.textOverlay.backgroundColor}
+                          onChange={(e) => {
+                            const updatedClip = {
+                              ...selectedClip,
+                              textOverlay: {
+                                ...selectedClip.textOverlay,
+                                backgroundColor: e.target.value
+                              }
+                            };
+                            setSelectedClip(updatedClip);
+                            setTimelineClips(prev => prev.map(c => 
+                              c.id === selectedClip.id ? updatedClip : c
+                            ));
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '5px',
+                            marginTop: '5px',
+                            borderRadius: '4px',
+                            border: '1px solid #ddd'
+                          }}
+                        >
+                          <option value="transparent">Transparent</option>
+                          <option value="#00000080">Black (Semi)</option>
+                          <option value="#FFFFFF80">White (Semi)</option>
+                          <option value="#000000">Black</option>
+                          <option value="#FFFFFF">White</option>
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              {/* TIMING INFO */}
+              <div style={{ 
+                padding: '10px', 
+                background: '#e8f4fd', 
+                borderRadius: '4px',
+                fontSize: '14px'
+              }}>
+                <div style={{ color: '#2c5282' }}>
+                  <strong>Clip ends at:</strong> {selectedClip.end.toFixed(1)}s
+                </div>
+                <div style={{ fontSize: '12px', color: '#4a5568', marginTop: '5px' }}>
+                  Next clip starts automatically
+                </div>
               </div>
             </div>
-            
-            <div style={{ marginBottom: '10px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                Position:
-                <select
-                  value={selectedClip.textOverlay.position}
-                  onChange={(e) => {
-                    let x, y;
-                    switch(e.target.value) {
-                      case 'top-left': x = 10; y = 10; break;
-                      case 'top-center': x = 50; y = 10; break;
-                      case 'top-right': x = 90; y = 10; break;
-                      case 'center': x = 50; y = 50; break;
-                      case 'bottom-left': x = 10; y = 90; break;
-                      case 'bottom-center': x = 50; y = 90; break;
-                      case 'bottom-right': x = 90; y = 90; break;
-                      default: x = 50; y = 50;
-                    }
-                    
-                    const updatedClip = {
-                      ...selectedClip,
-                      textOverlay: {
-                        ...selectedClip.textOverlay,
-                        position: e.target.value,
-                        x, y
-                      }
-                    };
-                    setSelectedClip(updatedClip);
-                    setTimelineClips(prev => prev.map(c => 
-                      c.id === selectedClip.id ? updatedClip : c
-                    ));
-                  }}
-                  style={{
-                    width: '100%',
-                    padding: '5px',
-                    marginTop: '5px',
-                    borderRadius: '4px',
-                    border: '1px solid #ddd'
-                  }}
-                >
-                  <option value="top-left">Top Left</option>
-                  <option value="top-center">Top Center</option>
-                  <option value="top-right">Top Right</option>
-                  <option value="center">Center</option>
-                  <option value="bottom-left">Bottom Left</option>
-                  <option value="bottom-center">Bottom Center</option>
-                  <option value="bottom-right">Bottom Right</option>
-                </select>
-              </label>
+          ) : (
+            <div style={{ 
+              textAlign: 'center', 
+              padding: '30px',
+              color: '#95a5a6'
+            }}>
+              Select a clip to edit properties
             </div>
-            
-            <div style={{ marginBottom: '10px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                Background:
-                <select
-                  value={selectedClip.textOverlay.backgroundColor}
-                  onChange={(e) => {
-                    const updatedClip = {
-                      ...selectedClip,
-                      textOverlay: {
-                        ...selectedClip.textOverlay,
-                        backgroundColor: e.target.value
-                      }
-                    };
-                    setSelectedClip(updatedClip);
-                    setTimelineClips(prev => prev.map(c => 
-                      c.id === selectedClip.id ? updatedClip : c
-                    ));
-                  }}
-                  style={{
-                    width: '100%',
-                    padding: '5px',
-                    marginTop: '5px',
-                    borderRadius: '4px',
-                    border: '1px solid #ddd'
-                  }}
-                >
-                  <option value="transparent">Transparent</option>
-                  <option value="#00000080">Black (Semi)</option>
-                  <option value="#FFFFFF80">White (Semi)</option>
-                  <option value="#000000">Black</option>
-                  <option value="#FFFFFF">White</option>
-                </select>
-              </label>
-            </div>
-          </div>
-        )}
-      </div>
-      
-      {/* TIMING INFO */}
-      <div style={{ 
-        padding: '10px', 
-        background: '#e8f4fd', 
-        borderRadius: '4px',
-        fontSize: '14px'
-      }}>
-        <div style={{ color: '#2c5282' }}>
-          <strong>Clip ends at:</strong> {selectedClip.end.toFixed(1)}s
+          )}
         </div>
-        <div style={{ fontSize: '12px', color: '#4a5568', marginTop: '5px' }}>
-          Next clip starts automatically
-        </div>
-      </div>
-    </div>
-  ) : (
-    <div style={{ 
-      textAlign: 'center', 
-      padding: '30px',
-      color: '#95a5a6'
-    }}>
-      Select a clip to edit properties
-    </div>
-  )}
-</div>
       </div>
 
       {/* FOOTER */}
