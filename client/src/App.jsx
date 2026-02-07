@@ -1,6 +1,26 @@
 import React, { useState, useRef, useEffect } from 'react';
 import './App.css';
 
+// Add this at the beginning of your App function
+const getApiUrl = () => {
+  // Check localStorage for override (for testing)
+  const override = localStorage.getItem('API_URL_OVERRIDE');
+  if (override) {
+    console.log('Using localStorage override:', override);
+    return override;
+  }
+  
+  // Production on Netlify
+  if (window.location.hostname.includes('netlify.app')) {
+    return 'https://video-editor-backend-0hda.onrender.com';
+  }
+  
+  // Development
+  return import.meta.env.VITE_API_URL || 'http://localhost:5000';
+};
+
+const API_URL = getApiUrl();
+
 function App() {
   const [mediaFiles, setMediaFiles] = useState([]);
   const [timelineClips, setTimelineClips] = useState([]);
