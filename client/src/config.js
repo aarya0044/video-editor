@@ -1,11 +1,6 @@
-// client/src/config.js
-const API_BASE = process.env.NODE_ENV === 'production'
-  ? `https://video-editor-backend-ohnda.onrender.com`
-  : `http://localhost:5000`;
-
+// src/config.js
 export const config = {
-  apiUrl: API_BASE
+  apiUrl: process.env.NODE_ENV === 'production' 
+    ? 'https://video-editor-backend-0hda.onrender.com'
+    : 'http://localhost:5000'
 };
-
-// Also export API_BASE directly for compatibility
-export { API_BASE };
