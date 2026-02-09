@@ -32,6 +32,7 @@ function App() {
   const fileInputRef = useRef(null);
   const canvasRef = useRef(null);
 
+
   console.log('🔧 Current configuration:');
   console.log('🔧 Window location:', window.location.hostname);
   console.log('🔧 API_URL being used:', API_URL);
