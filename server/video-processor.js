@@ -92,207 +92,87 @@ class VideoProcessor {
   }
 
   async createSimpleVideo(clip, outputPath) {
-    return new Promise((resolve, reject) => {
-      try {
-        console.log('\n🎬 ======== PROCESSING CLIP ========');
-        console.log('📋 Clip Info:', {
-          name: clip.name,
-          type: clip.type,
-          start: clip.start,
-          end: clip.end,
-          duration: clip.end - clip.start,
-          url: clip.url
-        });
+  return new Promise((resolve, reject) => {
+    try {
+      console.log('\n🎬 ======== PROCESSING CLIP ========');
+      console.log('📋 Clip Info:', {
+        name: clip.name,
+        type: clip.type,
+        start: clip.start,
+        end: clip.end,
+        duration: clip.end - clip.start,
+        url: clip.url,
+        textOverlay: clip.textOverlay
+      });
+      
+      // ... (keep the existing file finding code) ...
+      
+      // Add text overlay if enabled
+      if (clip.textOverlay?.enabled && clip.textOverlay.text && clip.textOverlay.text.trim() !== '') {
+        console.log(`🖋️ Adding text overlay: "${clip.textOverlay.text}"`);
         
-        // Extract filename from URL
-        console.log('🔍 Looking for file from URL:', clip.url);
+        const text = this.escapeText(clip.textOverlay.text.trim());
+        const fontSize = clip.textOverlay.fontSize || 24;
+        const fontColor = clip.textOverlay.fontColor || 'white';
+        const position = clip.textOverlay.position || 'center';
         
-        let filename = '';
-        if (clip.url) {
-          try {
-            // Handle different URL formats
-            if (clip.url.includes('/uploads/')) {
-              filename = clip.url.split('/uploads/')[1];
-            } else {
-              const urlObj = new URL(clip.url);
-              filename = urlObj.pathname.split('/').pop();
-            }
-          } catch (error) {
-            // If URL parsing fails, try to extract manually
-            const parts = clip.url.split('/');
-            filename = parts[parts.length - 1];
-          }
+        // Map position to FFmpeg coordinates
+        let x, y;
+        switch (position) {
+          case 'center':
+            x = '(w-text_w)/2';
+            y = '(h-text_h)/2';
+            break;
+          case 'top-left':
+            x = '10';
+            y = '10';
+            break;
+          case 'top-right':
+            x = '(w-text_w-10)';
+            y = '10';
+            break;
+          case 'bottom-left':
+            x = '10';
+            y = '(h-text_h-10)';
+            break;
+          case 'bottom-right':
+            x = '(w-text_w-10)';
+            y = '(h-text_h-10)';
+            break;
+          default:
+            x = '(w-text_w)/2';
+            y = '(h-text_h)/2';
         }
         
-        // Clean filename - remove URL parameters and decode
-        filename = decodeURIComponent(filename).split('?')[0].trim();
-        console.log('🔍 Extracted filename:', filename);
+        // Add background box for better readability
+        const drawtextFilter = `drawtext=text='${text}':fontsize=${fontSize}:fontcolor=${fontColor}:x=${x}:y=${y}:box=1:boxcolor=black@0.5:boxborderw=5`;
         
-        // Try to find the actual file
-        const uploadsDir = path.join(__dirname, 'uploads');
-        let filePath = '';
-        let foundFile = '';
+        console.log(`   Position: ${position} -> x=${x}, y=${y}`);
+        console.log(`   Font: ${fontSize}px, Color: ${fontColor}`);
         
-        if (fs.existsSync(uploadsDir)) {
-          // Try direct path first
-          const directPath = path.join(uploadsDir, filename);
-          if (fs.existsSync(directPath)) {
-            filePath = directPath;
-            foundFile = filename;
-            console.log('✅ Found file at direct path:', directPath);
-          } else {
-            // Use our smart file finder
-            foundFile = this.findFileByPartialName(filename, uploadsDir, clip.name);
-            if (foundFile) {
-              filePath = path.join(uploadsDir, foundFile);
-              console.log('✅ Found file via finder:', filePath);
-            }
-          }
-        } else {
-          console.error('❌ Uploads directory does not exist:', uploadsDir);
-          reject(new Error('Uploads directory not found'));
-          return;
-        }
-        
-        if (!filePath || !fs.existsSync(filePath)) {
-          console.error('❌ File not found! Looking for:', filename);
-          if (fs.existsSync(uploadsDir)) {
-            console.log('📂 Available files in uploads:', fs.readdirSync(uploadsDir));
-          } else {
-            console.log('❌ Uploads directory does not exist');
-          }
-          reject(new Error(`File not found: ${clip.name}`));
-          return;
-        }
-        
-        console.log('✅ Found file:', foundFile);
-        console.log('📁 File path:', filePath);
-        
-        const duration = clip.end - clip.start;
-        console.log(`⏱️ Duration: ${duration} seconds | Type: ${clip.type}`);
-        
-        let command;
-        
-        if (clip.type.includes('video')) {
-          console.log('🎥 Processing as VIDEO');
-          command = ffmpeg(filePath)
-            .setStartTime(clip.start)
-            .setDuration(duration)
-            .videoCodec('libx264')
-            .audioCodec('aac')
-            .outputOptions([
-              '-pix_fmt yuv420p',
-              '-preset ultrafast',
-              '-crf 28'
-            ]);
-            
+        if (clip.type.includes('video') || clip.type.includes('audio')) {
+          command = command.videoFilters(drawtextFilter);
         } else if (clip.type.includes('image')) {
-          console.log('🖼️ Processing as IMAGE');
-          
-          command = ffmpeg(filePath)
-            .inputOptions(['-loop', '1'])
-            .input('anullsrc')
-            .inputOptions([
-              '-f', 'lavfi',
-              '-t', duration.toString()
-            ])
-            .outputOptions([
-              '-map', '0:v',
-              '-map', '1:a',
-              '-c:v', 'libx264',
-              '-c:a', 'aac',
-              '-t', duration.toString(),
-              '-pix_fmt', 'yuv420p',
-              '-preset', 'ultrafast',
-              '-crf', '28',
-              '-vf', 'scale=1280:720'
-            ]);
-            
-        } else if (clip.type.includes('audio')) {
-          console.log('🎵 Processing as AUDIO');
-          
-          command = ffmpeg('color=black:s=1280x720')
-            .inputOptions([
-              '-f', 'lavfi',
-              '-t', duration.toString()
-            ])
-            .input(filePath)
-            .outputOptions([
-              '-map', '0:v',
-              '-map', '1:a',
-              '-c:v', 'libx264',
-              '-c:a', 'aac',
-              '-shortest',
-              '-pix_fmt', 'yuv420p',
-              '-preset', 'ultrafast',
-              '-crf', '28'
-            ]);
-        } else {
-          reject(new Error(`Unsupported file type: ${clip.type}`));
-          return;
-        }
-        
-        // Add text overlay if enabled
-        if (clip.textOverlay?.enabled && clip.textOverlay.text) {
-          console.log(`🖋️ Adding text overlay: "${clip.textOverlay.text}"`);
-          
-          const text = clip.textOverlay.text.replace(/'/g, "''");
-          const fontSize = clip.textOverlay.fontSize || 24;
-          const fontColor = clip.textOverlay.fontColor || 'white';
-          
-          const drawtextFilter = `drawtext=text='${text}':fontsize=${fontSize}:fontcolor=${fontColor}:x=(w-text_w)/2:y=(h-text_h)/2`;
-          
-          if (clip.type.includes('video') || clip.type.includes('audio')) {
-            command = command.videoFilters(drawtextFilter);
-          } else if (clip.type.includes('image')) {
+          // For images, combine scaling and text
+          if (clip.type.includes('image')) {
             command = command.outputOptions(['-vf', `scale=1280:720,${drawtextFilter}`]);
+          } else {
+            command = command.videoFilters(drawtextFilter);
           }
         }
-        
-        console.log('🚀 Starting FFmpeg processing...');
-        
-        command.output(outputPath)
-               .on('start', (cmd) => {
-                 console.log('🔧 FFmpeg command:', cmd);
-               })
-               .on('progress', (progress) => {
-                 if (progress.percent) {
-                   console.log(`📊 Progress: ${progress.percent.toFixed(2)}%`);
-                 }
-               })
-               .on('end', () => {
-                 console.log('✅ Clip created successfully at:', outputPath);
-                 
-                 if (fs.existsSync(outputPath)) {
-                   const stats = fs.statSync(outputPath);
-                   console.log(`✅ Output file size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
-                 }
-                 
-                 resolve(outputPath);
-               })
-               .on('error', (err, stdout, stderr) => {
-                 console.error('❌ FFmpeg ERROR:', err.message);
-                 console.error('❌ FFmpeg stderr:', stderr);
-                 console.error('❌ FFmpeg stdout:', stdout);
-                 
-                 // Try SIMPLER fallback
-                 console.log('🔄 Trying SIMPLER fallback...');
-                 this.createSimpleVideoFallback(clip, outputPath)
-                   .then(resolve)
-                   .catch(fallbackError => {
-                     console.error('❌ Fallback also failed:', fallbackError.message);
-                     reject(new Error(`Failed to process ${clip.name}: ${err.message}`));
-                   });
-               })
-               .run();
-               
-      } catch (error) {
-        console.error('❌ Unexpected error in createSimpleVideo:', error);
-        reject(error);
+      } else if (clip.textOverlay?.enabled && (!clip.textOverlay.text || clip.textOverlay.text.trim() === '')) {
+        console.log('⚠️ Text overlay enabled but text is empty');
       }
-    });
-  }
-
+      
+      console.log('🚀 Starting FFmpeg processing...');
+      
+      // ... (rest of your existing code) ...
+    } catch (error) {
+      console.error('❌ Unexpected error in createSimpleVideo:', error);
+      reject(error);
+    }
+  });
+}
   // SIMPLER Fallback method without text overlay
   async createSimpleVideoFallback(clip, outputPath) {
     return new Promise((resolve, reject) => {
