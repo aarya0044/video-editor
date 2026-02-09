@@ -31,38 +31,64 @@ class VideoProcessor {
   }
 
   // Helper method to find file by name (with or without timestamp)
-  findFileByPartialName(partialName, uploadsDir) {
-    const files = fs.readdirSync(uploadsDir);
-    
-    // Try exact match first
-    const exactMatch = files.find(f => f === partialName);
-    if (exactMatch) return exactMatch;
-    
-    // Try without URL encoding
-    const decodedName = decodeURIComponent(partialName);
-    const decodedMatch = files.find(f => f === decodedName);
-    if (decodedMatch) return decodedMatch;
-    
-    // Try partial match (without timestamp)
-    const nameWithoutExt = partialName.replace(/\.[^/.]+$/, "");
-    const timestampRegex = /-\d+$/; // Matches timestamp like -1770145553497
-    
-    for (const file of files) {
-      const fileWithoutExt = file.replace(/\.[^/.]+$/, "");
-      
-      // Check if it's the same base name (ignoring timestamp)
-      if (fileWithoutExt.replace(timestampRegex, '') === nameWithoutExt.replace(timestampRegex, '')) {
-        return file;
+  findFileByPartialName(partialName, uploadsDir, clipName = '') {
+    try {
+      if (!fs.existsSync(uploadsDir)) {
+        console.error('Uploads directory not found:', uploadsDir);
+        return null;
       }
       
-      // Also try matching just the original filename (before timestamp)
-      const originalName = clip.name || '';
-      if (file.includes(originalName.split('.')[0])) {
-        return file;
+      const files = fs.readdirSync(uploadsDir);
+      console.log('📂 Available files in uploads:', files);
+      
+      // Decode URL-encoded filename
+      const decodedFilename = decodeURIComponent(partialName);
+      
+      // Try exact match
+      for (const file of files) {
+        if (file === decodedFilename || file === partialName) {
+          console.log('✅ Exact match found:', file);
+          return file;
+        }
       }
+      
+      // Try matching base name (without timestamp)
+      const baseName = decodedFilename.split('-').slice(0, -1).join('-');
+      if (baseName) {
+        for (const file of files) {
+          const fileBase = file.split('-').slice(0, -1).join('-');
+          if (fileBase === baseName) {
+            console.log('✅ Base name match found:', file);
+            return file;
+          }
+        }
+      }
+      
+      // Try matching by clip name
+      if (clipName) {
+        const cleanClipName = path.basename(clipName).split('.')[0];
+        for (const file of files) {
+          if (file.includes(cleanClipName)) {
+            console.log('✅ Clip name match found:', file);
+            return file;
+          }
+        }
+      }
+      
+      // Try partial match as last resort
+      for (const file of files) {
+        if (file.includes(decodedFilename) || decodedFilename.includes(file)) {
+          console.log('✅ Partial match found:', file);
+          return file;
+        }
+      }
+      
+      console.log('❌ No match found for:', partialName);
+      return null;
+    } catch (error) {
+      console.error('❌ Error in findFileByPartialName:', error);
+      return null;
     }
-    
-    return null;
   }
 
   async createSimpleVideo(clip, outputPath) {
@@ -78,17 +104,28 @@ class VideoProcessor {
           url: clip.url
         });
         
-        // Extract base filename (without URL encoding issues)
+        // Extract filename from URL
+        console.log('🔍 Looking for file from URL:', clip.url);
+        
         let filename = '';
-        if (clip.url.includes('/uploads/')) {
-          filename = clip.url.split('/uploads/')[1];
-        } else {
-          const urlParts = clip.url.split('/');
-          filename = urlParts[urlParts.length - 1];
+        if (clip.url) {
+          try {
+            // Handle different URL formats
+            if (clip.url.includes('/uploads/')) {
+              filename = clip.url.split('/uploads/')[1];
+            } else {
+              const urlObj = new URL(clip.url);
+              filename = urlObj.pathname.split('/').pop();
+            }
+          } catch (error) {
+            // If URL parsing fails, try to extract manually
+            const parts = clip.url.split('/');
+            filename = parts[parts.length - 1];
+          }
         }
         
-        // Remove URL encoding and clean up
-        filename = decodeURIComponent(filename).trim();
+        // Clean filename - remove URL parameters and decode
+        filename = decodeURIComponent(filename).split('?')[0].trim();
         console.log('🔍 Extracted filename:', filename);
         
         // Try to find the actual file
@@ -102,11 +139,13 @@ class VideoProcessor {
           if (fs.existsSync(directPath)) {
             filePath = directPath;
             foundFile = filename;
+            console.log('✅ Found file at direct path:', directPath);
           } else {
             // Use our smart file finder
-            foundFile = this.findFileByPartialName(filename, uploadsDir);
+            foundFile = this.findFileByPartialName(filename, uploadsDir, clip.name);
             if (foundFile) {
               filePath = path.join(uploadsDir, foundFile);
+              console.log('✅ Found file via finder:', filePath);
             }
           }
         } else {
@@ -119,6 +158,8 @@ class VideoProcessor {
           console.error('❌ File not found! Looking for:', filename);
           if (fs.existsSync(uploadsDir)) {
             console.log('📂 Available files in uploads:', fs.readdirSync(uploadsDir));
+          } else {
+            console.log('❌ Uploads directory does not exist');
           }
           reject(new Error(`File not found: ${clip.name}`));
           return;
@@ -266,13 +307,27 @@ class VideoProcessor {
           const urlParts = clip.url.split('/');
           filename = urlParts[urlParts.length - 1];
         }
-        filename = decodeURIComponent(filename).trim();
+        filename = decodeURIComponent(filename).split('?')[0].trim();
         
         // Find the file
         const uploadsDir = path.join(__dirname, 'uploads');
-        const filePath = path.join(uploadsDir, filename);
+        let filePath = '';
         
-        if (!fs.existsSync(filePath)) {
+        if (fs.existsSync(uploadsDir)) {
+          // Try direct path
+          const directPath = path.join(uploadsDir, filename);
+          if (fs.existsSync(directPath)) {
+            filePath = directPath;
+          } else {
+            // Try to find file using the finder
+            const foundFile = this.findFileByPartialName(filename, uploadsDir, clip.name);
+            if (foundFile) {
+              filePath = path.join(uploadsDir, foundFile);
+            }
+          }
+        }
+        
+        if (!filePath || !fs.existsSync(filePath)) {
           reject(new Error(`File not found in fallback: ${filename}`));
           return;
         }

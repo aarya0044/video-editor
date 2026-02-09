@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Environment detection - CRITICAL FIX
+// In index.js, make sure it's:
 const isProduction = process.env.NODE_ENV === 'production';
 const BASE_URL = isProduction ? 'https://video-editor-backend-0hda.onrender.com' : `http://localhost:${PORT}`;
 
@@ -21,14 +21,26 @@ const videoProcessor = new VideoProcessor();
 
 // Middleware - FIXED CORS
 app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'http://localhost:3000',
-    'https://video-editor-project.netlify.app',
-    'https://6984698--video-editor-project.netlify.app',
-    'https://*.netlify.app'
-  ],
-  credentials: true
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'https://video-editor-project.netlify.app',
+      'https://*.netlify.app'
+    ];
+    
+    if (allowedOrigins.includes(origin) || origin.includes('localhost')) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json({ limit: '50mb' }));
@@ -101,6 +113,37 @@ app.post('/api/upload', upload.array('files'), (req, res) => {
       success: false,
       error: error.message 
     });
+  }
+});
+
+// Simple test endpoint for debugging
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    environment: isProduction ? 'production' : 'development',
+    baseUrl: BASE_URL
+  });
+});
+
+app.get('/api/list-files', (req, res) => {
+  try {
+    const uploadsDir = path.join(__dirname, 'uploads');
+    const outputsDir = path.join(__dirname, 'outputs');
+    
+    const uploads = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
+    const outputs = fs.existsSync(outputsDir) ? fs.readdirSync(outputsDir) : [];
+    
+    res.json({
+      uploads,
+      outputs,
+      uploadsCount: uploads.length,
+      outputsCount: outputs.length,
+      uploadsPath: uploadsDir,
+      outputsPath: outputsDir
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -289,6 +332,53 @@ app.post('/api/export', express.json(), (req, res) => {
 // SERVE STATIC FILES
 app.use('/uploads', express.static('uploads'));
 app.use('/outputs', express.static('outputs'));
+
+// Test endpoint to check if files are being uploaded correctly
+app.get('/api/test-files', (req, res) => {
+  try {
+    const uploadsDir = path.join(__dirname, 'uploads');
+    const files = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
+    
+    res.json({
+      success: true,
+      uploadsDir,
+      fileCount: files.length,
+      files: files.map(file => {
+        const filePath = path.join(uploadsDir, file);
+        const stats = fs.statSync(filePath);
+        return {
+          name: file,
+          size: stats.size,
+          modified: stats.mtime,
+          url: `${BASE_URL}/uploads/${file}`
+        };
+      })
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Clear all files (for testing)
+app.post('/api/clear-files', (req, res) => {
+  try {
+    const uploadsDir = path.join(__dirname, 'uploads');
+    const outputsDir = path.join(__dirname, 'outputs');
+    const tempDir = path.join(__dirname, 'temp');
+    
+    [uploadsDir, outputsDir, tempDir].forEach(dir => {
+      if (fs.existsSync(dir)) {
+        fs.readdirSync(dir).forEach(file => {
+          fs.unlinkSync(path.join(dir, file));
+        });
+      }
+    });
+    
+    res.json({ success: true, message: 'All files cleared' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // TEST ENDPOINT
 app.get('/api/test', (req, res) => {
