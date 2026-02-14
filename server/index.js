@@ -12,43 +12,34 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// In index.js, make sure it's:
 const isProduction = process.env.NODE_ENV === 'production';
-const BASE_URL = isProduction ? 'https://video-editor-backend-0hda.onrender.com' : `http://localhost:${PORT}`;
+const BASE_URL = isProduction
+  ? 'https://video-editor-backend-0hda.onrender.com'
+  : `http://localhost:${PORT}`;
 
-// Initialize video processor
 const videoProcessor = new VideoProcessor();
 
-// Middleware - FIXED CORS
+// ── CORS ──────────────────────────────────────────────────────────────────────
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
-
-    // Allow Netlify + localhost
-    if (
-      origin.endsWith('.netlify.app') ||
-      origin.includes('localhost')
-    ) {
+    if (origin.endsWith('.netlify.app') || origin.includes('localhost')) {
       return callback(null, true);
     }
-
     console.log('❌ Blocked by CORS:', origin);
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true
 }));
 
-
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Configure file upload
+// ── MULTER ────────────────────────────────────────────────────────────────────
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = 'uploads/';
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
+    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
@@ -59,60 +50,41 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({ 
+const upload = multer({
   storage,
   fileFilter: (req, file, cb) => {
-    const allowedTypes = /mp4|mov|avi|wmv|flv|mkv|webm|jpg|jpeg|png|gif/;
+    const allowedTypes = /mp4|mov|avi|wmv|flv|mkv|webm|jpg|jpeg|png|gif|mp3|wav|aac|ogg/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    
-    if (extname && mimetype) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only video and image files are allowed'));
-    }
+    if (extname) return cb(null, true);
+    cb(new Error('Only video, image and audio files are allowed'));
   },
-  limits: { fileSize: 100 * 1024 * 1024 }
+  limits: { fileSize: 200 * 1024 * 1024 } // 200 MB
 });
 
-// UPLOAD ENDPOINT - FIXED URLS
+// ── UPLOAD ────────────────────────────────────────────────────────────────────
 app.post('/api/upload', upload.array('files'), (req, res) => {
   try {
     console.log('📁 Files received:', req.files?.length || 0);
-    
     if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'No files uploaded' 
-      });
+      return res.status(400).json({ success: false, error: 'No files uploaded' });
     }
-    
     const files = req.files.map(file => ({
       id: Date.now() + Math.random(),
       name: file.originalname,
       path: `/uploads/${file.filename}`,
       type: file.mimetype,
       size: file.size,
-      url: `${BASE_URL}/uploads/${file.filename}`  // FIXED: Uses BASE_URL
+      url: `${BASE_URL}/uploads/${file.filename}`
     }));
-    
     console.log('✅ Files processed:', files.map(f => f.url));
-    
-    res.json({
-      success: true,
-      message: `Uploaded ${files.length} file(s)!`,
-      files: files
-    });
+    res.json({ success: true, message: `Uploaded ${files.length} file(s)!`, files });
   } catch (error) {
     console.error('Upload error:', error);
-    res.status(500).json({ 
-      success: false,
-      error: error.message 
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// Simple test endpoint for debugging
+// ── HEALTH ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'healthy',
@@ -122,293 +94,139 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+app.get('/api/test', (req, res) => {
+  res.json({
+    message: '✅ EditFlow Server is running!',
+    time: new Date().toLocaleString(),
+    environment: isProduction ? 'production' : 'development',
+    baseUrl: BASE_URL
+  });
+});
+
+// ── LIST / DEBUG FILES ────────────────────────────────────────────────────────
 app.get('/api/list-files', (req, res) => {
   try {
     const uploadsDir = path.join(__dirname, 'uploads');
     const outputsDir = path.join(__dirname, 'outputs');
-    
     const uploads = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
     const outputs = fs.existsSync(outputsDir) ? fs.readdirSync(outputsDir) : [];
-    
-    res.json({
-      uploads,
-      outputs,
-      uploadsCount: uploads.length,
-      outputsCount: outputs.length,
-      uploadsPath: uploadsDir,
-      outputsPath: outputsDir
-    });
+    res.json({ uploads, outputs, uploadsCount: uploads.length, outputsCount: outputs.length });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// DEBUG ENDPOINT - Check what's in uploads folder
 app.get('/api/debug-uploads', (req, res) => {
   try {
     const uploadsDir = path.join(__dirname, 'uploads');
-    
     if (!fs.existsSync(uploadsDir)) {
-      return res.json({ 
-        success: true, 
-        count: 0, 
-        files: [],
-        message: 'Uploads directory is empty'
-      });
+      return res.json({ success: true, count: 0, files: [], message: 'Uploads directory is empty' });
     }
-    
-    const files = fs.readdirSync(uploadsDir);
-    
-    const fileDetails = files.map(filename => {
+    const files = fs.readdirSync(uploadsDir).map(filename => {
       const filePath = path.join(uploadsDir, filename);
       const stats = fs.statSync(filePath);
-      return {
-        name: filename,
-        size: stats.size,
-        type: path.extname(filename),
-        url: `${BASE_URL}/uploads/${filename}`  // FIXED: Uses BASE_URL
-      };
+      return { name: filename, size: stats.size, type: path.extname(filename), url: `${BASE_URL}/uploads/${filename}` };
     });
-    
-    res.json({
-      success: true,
-      count: files.length,
-      files: fileDetails
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
-  }
-});
-
-// SINGLE VIDEO EXPORT ENDPOINT
-app.post('/api/export-video', express.json(), async (req, res) => {
-  console.log('🎬 Received video export request');
-  
-  try {
-    const { clips, projectName = `video-${Date.now()}` } = req.body;
-    
-    if (!clips || clips.length === 0) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'No clips in timeline' 
-      });
-    }
-    
-    console.log(`📋 Processing ${clips.length} clips for project: ${projectName}`);
-    
-    // Set longer timeout for video processing
-    req.setTimeout(300000); // 5 minutes
-    
-    // Process the video
-    const outputPath = await videoProcessor.processTimeline({
-      clips,
-      projectName
-    });
-    
-    console.log('✅ Video created at:', outputPath);
-    
-    // Check if file exists
-    if (!fs.existsSync(outputPath)) {
-      throw new Error('Video file was not created');
-    }
-    
-    // Get file stats
-    const stats = fs.statSync(outputPath);
-    console.log(`📦 Video size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
-    
-    // Send the file
-    res.download(outputPath, path.basename(outputPath), (err) => {
-      if (err) {
-        console.error('❌ Download error:', err);
-        res.status(500).json({ error: 'Download failed' });
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Video export error:', error.message);
-    console.error('❌ Error stack:', error.stack);
-    
-    res.status(500).json({ 
-      success: false,
-      error: error.message,
-      note: 'Check server console for details'
-    });
-  }
-});
-
-// Add this endpoint to index.js
-app.post('/api/debug-clips', express.json(), (req, res) => {
-  console.log('🔍 DEBUG - Received clips from frontend:');
-  const { clips } = req.body;
-  
-  if (!clips || !Array.isArray(clips)) {
-    return res.status(400).json({ error: 'No clips array provided' });
-  }
-  
-  clips.forEach((clip, i) => {
-    console.log(`\nClip ${i}:`);
-    console.log(`  Name: ${clip.name}`);
-    console.log(`  Type: ${clip.type}`);
-    console.log(`  URL: ${clip.url}`);
-    console.log(`  Start: ${clip.start}, End: ${clip.end}`);
-  });
-  
-  res.json({ 
-    success: true, 
-    message: 'Clips received', 
-    count: clips.length,
-    clips: clips.map(c => ({ name: c.name, url: c.url, type: c.type }))
-  });
-});
-
-// LEGACY EXPORT ENDPOINT (for text instructions)
-app.post('/api/export', express.json(), (req, res) => {
-  try {
-    const { clips, projectName = 'My Video Project' } = req.body;
-    
-    if (!clips || clips.length === 0) {
-      return res.status(400).json({ error: 'No clips in timeline' });
-    }
-    
-    // Create outputs directory
-    const outputsDir = path.join(__dirname, 'outputs');
-    if (!fs.existsSync(outputsDir)) {
-      fs.mkdirSync(outputsDir, { recursive: true });
-    }
-    
-    const timestamp = Date.now();
-    const filename = `video-instructions-${timestamp}.txt`;
-    const filepath = path.join(outputsDir, filename);
-    
-    // Create content
-    let content = `🎬 VIDEO EDITOR EXPORT INSTRUCTIONS 🎬\n\n`;
-    content += `Project: ${projectName}\n`;
-    content += `Export Time: ${new Date().toLocaleString()}\n\n`;
-    content += `=== YOUR TIMELINE ===\n\n`;
-    
-    clips.forEach((clip, i) => {
-      content += `Clip ${i+1}: ${clip.name}\n`;
-      content += `  - Type: ${clip.type.includes('video') ? 'Video' : 'Image'}\n`;
-      content += `  - Start: ${clip.start}s\n`;
-      content += `  - End: ${clip.end}s\n`;
-      content += `  - Duration: ${(clip.end - clip.start).toFixed(1)}s\n`;
-      
-      if (clip.textOverlay?.enabled && clip.textOverlay.text) {
-        content += `  - Text Overlay: "${clip.textOverlay.text}"\n`;
-        content += `    * Font Size: ${clip.textOverlay.fontSize}\n`;
-        content += `    * Color: ${clip.textOverlay.fontColor}\n`;
-        content += `    * Position: ${clip.textOverlay.x}%, ${clip.textOverlay.y}%\n`;
-      }
-      content += `\n`;
-    });
-    
-    const totalDuration = clips.reduce((sum, clip) => sum + (clip.end - clip.start), 0);
-    content += `Total Duration: ${totalDuration.toFixed(1)} seconds\n\n`;
-    
-    // Write file
-    fs.writeFileSync(filepath, content);
-    
-    // Download the file
-    res.download(filepath, filename, (err) => {
-      if (err) {
-        console.error('Download error:', err);
-        res.status(500).json({ error: 'Download failed' });
-      }
-    });
-    
-  } catch (error) {
-    console.error('Export error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// SERVE STATIC FILES
-app.use('/uploads', express.static('uploads'));
-app.use('/outputs', express.static('outputs'));
-
-// Test endpoint to check if files are being uploaded correctly
-app.get('/api/test-files', (req, res) => {
-  try {
-    const uploadsDir = path.join(__dirname, 'uploads');
-    const files = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
-    
-    res.json({
-      success: true,
-      uploadsDir,
-      fileCount: files.length,
-      files: files.map(file => {
-        const filePath = path.join(uploadsDir, file);
-        const stats = fs.statSync(filePath);
-        return {
-          name: file,
-          size: stats.size,
-          modified: stats.mtime,
-          url: `${BASE_URL}/uploads/${file}`
-        };
-      })
-    });
+    res.json({ success: true, count: files.length, files });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// Clear all files (for testing)
+// ── EXPORT VIDEO ──────────────────────────────────────────────────────────────
+// Accepts EITHER:
+//   { tracks: [...], projectName }          ← new App.jsx format
+//   { videoClips: [...], audioClips: [...], projectName }  ← legacy format
+app.post('/api/export-video', express.json(), async (req, res) => {
+  console.log('🎬 Received video export request');
+  try {
+    let { tracks, videoClips, audioClips, projectName = `video-${Date.now()}` } = req.body;
+
+    // Normalise to tracks array
+    if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
+      tracks = [
+        { id: 'video-track', type: 'video', name: 'Video Track', clips: videoClips || [] },
+        { id: 'audio-track', type: 'audio', name: 'Audio Track', clips: audioClips || [] },
+        { id: 'text-track',  type: 'text',  name: 'Text Overlays', clips: [] }
+      ];
+    }
+
+    const totalClips = tracks.reduce((n, t) => n + (t.clips?.length || 0), 0);
+    if (totalClips === 0) {
+      return res.status(400).json({ success: false, error: 'No clips provided' });
+    }
+
+    const videoTrack = tracks.find(t => t.type === 'video');
+    console.log(`📋 Video clips: ${videoTrack?.clips?.length || 0}`);
+    tracks.forEach(t => console.log(`  ${t.type}: ${t.clips?.length || 0} clips`));
+
+    req.setTimeout(300000); // 5 min
+
+    const outputPath = await videoProcessor.processTimeline({ tracks, projectName });
+    console.log('✅ Video created at:', outputPath);
+
+    if (!fs.existsSync(outputPath)) throw new Error('Video file was not created');
+
+    res.download(outputPath, path.basename(outputPath), (err) => {
+      if (err) { console.error('❌ Download error:', err); }
+    });
+
+  } catch (error) {
+    console.error('❌ Video export error:', error.message);
+    console.error('❌ Stack:', error.stack);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ── CLEAR FILES ───────────────────────────────────────────────────────────────
 app.post('/api/clear-files', (req, res) => {
   try {
-    const uploadsDir = path.join(__dirname, 'uploads');
-    const outputsDir = path.join(__dirname, 'outputs');
-    const tempDir = path.join(__dirname, 'temp');
-    
-    [uploadsDir, outputsDir, tempDir].forEach(dir => {
-      if (fs.existsSync(dir)) {
-        fs.readdirSync(dir).forEach(file => {
-          fs.unlinkSync(path.join(dir, file));
-        });
-      }
+    ['uploads', 'outputs', 'temp'].forEach(dir => {
+      const d = path.join(__dirname, dir);
+      if (fs.existsSync(d)) fs.readdirSync(d).forEach(f => fs.unlinkSync(path.join(d, f)));
     });
-    
     res.json({ success: true, message: 'All files cleared' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// TEST ENDPOINT
-app.get('/api/test', (req, res) => {
-  res.json({ 
-    message: '✅ Video Editor Server is running!',
-    time: new Date().toLocaleString(),
-    environment: isProduction ? 'production' : 'development',
-    baseUrl: BASE_URL,
-    endpoints: [
-      'POST /api/upload - Upload media files',
-      'POST /api/export-video - Export timeline as MP4 video',
-      'POST /api/export - Export timeline as text instructions',
-      'GET /api/test - Test server connection'
-    ]
-  });
+// ── STATIC FILES ──────────────────────────────────────────────────────────────
+app.use('/uploads', express.static('uploads'));
+app.use('/outputs', express.static('outputs'));
+
+// Serve audio library files
+// Place MP3 files in: backend/public/audio/
+// Required files: chill-lofi.mp3, uplifting-corporate.mp3, cinematic-ambient.mp3
+const audioDir = path.join(__dirname, 'public', 'audio');
+if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true });
+app.use('/audio', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Range');
+  res.header('Accept-Ranges', 'bytes');
+  next();
+}, express.static(audioDir));
+
+// ── AUDIO LIST ENDPOINT ────────────────────────────────────────────────────────
+app.get('/api/audio-files', (req, res) => {
+  try {
+    const files = fs.existsSync(audioDir) ? fs.readdirSync(audioDir).filter(f => /\.(mp3|wav|ogg|m4a)$/i.test(f)) : [];
+    res.json({ success: true, files, audioDir });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
-// Error handling middleware
+// ── ERROR HANDLER ─────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('❌ Server Error:', err);
-  res.status(500).json({ 
-    success: false, 
-    error: err.message,
-    note: 'Check server logs for details'
-  });
+  res.status(500).json({ success: false, error: err.message });
 });
 
-// Start server
+// ── START ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`🚀 Video Editor Server Started!`);
+  console.log(`🚀 EditFlow Server Started!`);
   console.log(`📍 Environment: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
   console.log(`📡 Base URL: ${BASE_URL}`);
   console.log(`🔗 Test endpoint: ${BASE_URL}/api/test`);
-  console.log(`📁 Uploads: ${BASE_URL}/uploads`);
-  console.log(`📤 Outputs: ${BASE_URL}/outputs`);
-  console.log(`🎬 Ready for video editing!`);
 });
