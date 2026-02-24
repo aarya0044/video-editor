@@ -5,6 +5,8 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import VideoProcessor from './video-processor.js';
+import { tasks } from "./tasks.js";
+import { v4 as uuid } from "uuid";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -137,45 +139,52 @@ app.get('/api/debug-uploads', (req, res) => {
 // Accepts EITHER:
 //   { tracks: [...], projectName }          ← new App.jsx format
 //   { videoClips: [...], audioClips: [...], projectName }  ← legacy format
-app.post('/api/export-video', express.json(), async (req, res) => {
-  console.log('🎬 Received video export request');
-  try {
-    let { tracks, videoClips, audioClips, projectName = `video-${Date.now()}` } = req.body;
+app.post('/api/export-video', express.json(), (req, res) => {
+  console.log('🎬 Received async export request');
 
-    // Normalise to tracks array
-    if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
-      tracks = [
-        { id: 'video-track', type: 'video', name: 'Video Track', clips: videoClips || [] },
-        { id: 'audio-track', type: 'audio', name: 'Audio Track', clips: audioClips || [] },
-        { id: 'text-track',  type: 'text',  name: 'Text Overlays', clips: [] }
-      ];
-    }
+  let { tracks, videoClips, audioClips, projectName = `video-${Date.now()}` } = req.body;
 
-    const totalClips = tracks.reduce((n, t) => n + (t.clips?.length || 0), 0);
-    if (totalClips === 0) {
-      return res.status(400).json({ success: false, error: 'No clips provided' });
-    }
-
-    const videoTrack = tracks.find(t => t.type === 'video');
-    console.log(`📋 Video clips: ${videoTrack?.clips?.length || 0}`);
-    tracks.forEach(t => console.log(`  ${t.type}: ${t.clips?.length || 0} clips`));
-
-    req.setTimeout(300000); // 5 min
-
-    const outputPath = await videoProcessor.processTimeline({ tracks, projectName });
-    console.log('✅ Video created at:', outputPath);
-
-    if (!fs.existsSync(outputPath)) throw new Error('Video file was not created');
-
-    res.download(outputPath, path.basename(outputPath), (err) => {
-      if (err) { console.error('❌ Download error:', err); }
-    });
-
-  } catch (error) {
-    console.error('❌ Video export error:', error.message);
-    console.error('❌ Stack:', error.stack);
-    res.status(500).json({ success: false, error: error.message });
+  // Normalise to tracks array (KEEP THIS LOGIC)
+  if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
+    tracks = [
+      { id: 'video-track', type: 'video', name: 'Video Track', clips: videoClips || [] },
+      { id: 'audio-track', type: 'audio', name: 'Audio Track', clips: audioClips || [] },
+      { id: 'text-track',  type: 'text',  name: 'Text Overlays', clips: [] }
+    ];
   }
+
+  const totalClips = tracks.reduce((n, t) => n + (t.clips?.length || 0), 0);
+  if (totalClips === 0) {
+    return res.status(400).json({ error: 'No clips provided' });
+  }
+
+  const taskId = uuid();
+
+  // Create task
+  tasks[taskId] = {
+    status: "processing",
+    outputUrl: null,
+    error: null
+  };
+
+  // Run export in background
+  processVideoAsync(taskId, { tracks, projectName });
+
+  // Respond immediately (IMPORTANT)
+  res.json({
+    taskId,
+    message: "Export started"
+  });
+});
+
+app.get("/api/status/:taskId", (req, res) => {
+  const task = tasks[req.params.taskId];
+
+  if (!task) {
+    return res.status(404).json({ error: "Invalid task ID" });
+  }
+
+  res.json(task);
 });
 
 // ── CLEAR FILES ───────────────────────────────────────────────────────────────
@@ -222,6 +231,23 @@ app.use((err, req, res, next) => {
   console.error('❌ Server Error:', err);
   res.status(500).json({ success: false, error: err.message });
 });
+
+// helper function (NOT a route)
+async function processVideoAsync(taskId, data) {
+  try {
+    const outputPath = await videoProcessor.processTimeline(data);
+
+    tasks[taskId].status = "success";
+    tasks[taskId].outputUrl = `/outputs/${path.basename(outputPath)}`;
+
+    console.log(`✅ Task ${taskId} completed`);
+  } catch (err) {
+    tasks[taskId].status = "failed";
+    tasks[taskId].error = err.message;
+
+    console.error(`❌ Task ${taskId} failed`, err.message);
+  }
+}
 
 // ── START ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {

@@ -523,24 +523,50 @@ useEffect(() => {
         throw new Error(msg);
       }
 
-      const ct = response.headers.get("content-type") || "";
-      if (ct.includes("application/json")) {
-        const d = await response.json();
-        throw new Error(d.error || "Unexpected JSON response");
-      }
+      // Server returns a task id immediately — read JSON and start polling
+      const d = await response.json();
+      const taskId = d?.taskId;
+      if (!taskId) throw new Error(d?.error || 'No task ID returned from server');
 
-      const blob = await response.blob();
-      if (blob.size === 0) throw new Error("Server returned empty file");
+      showNotif('Export started — processing in background');
 
-      const url = window.URL.createObjectURL(blob);
-      const a   = document.createElement("a");
-      a.href = url; a.download = "export.mp4"; a.click();
-      window.URL.revokeObjectURL(url);
-      showNotif("Video exported!");
+      // Poll status endpoint until success/failure or timeout
+      let attempts = 0;
+      const maxAttempts = 60; // ~3 minutes (60 * 3s)
+      const interval = setInterval(async () => {
+        attempts += 1;
+        try {
+          const statusRes = await fetch(`${API_URL}/api/status/${taskId}`);
+          if (!statusRes.ok) throw new Error(`Status check failed: ${statusRes.status}`);
+          const statusData = await statusRes.json();
+
+          if (statusData.status === 'success') {
+            clearInterval(interval);
+            setExporting(false);
+            // outputUrl is returned by the server (relative); navigate to it to download
+            const downloadUrl = statusData.outputUrl && statusData.outputUrl.startsWith('http') ? statusData.outputUrl : `${API_URL}${statusData.outputUrl}`;
+            window.location.href = downloadUrl;
+          } else if (statusData.status === 'failed') {
+            clearInterval(interval);
+            setExporting(false);
+            showNotif('Export failed', 'error');
+            console.error('Export failed:', statusData.error);
+          } else if (attempts >= maxAttempts) {
+            clearInterval(interval);
+            setExporting(false);
+            showNotif('Export timed out — try again later', 'error');
+          }
+        } catch (err) {
+          clearInterval(interval);
+          setExporting(false);
+          showNotif(`Export failed: ${err.message}`, 'error');
+          console.error('Export polling error:', err);
+        }
+      }, 3000);
     } catch (err) {
       console.error("Export error:", err);
       showNotif(`Export failed: ${err.message}`, "error");
-    } finally { setExporting(false); }
+    }
   };
 
   /* ── RULER TICKS ──────────────────────────────────────────────────────── */

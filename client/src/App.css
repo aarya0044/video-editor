@@ -159,3 +159,11 @@ body {
 .draggable-media-wrapper:active {
   cursor: grabbing;
 }
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
