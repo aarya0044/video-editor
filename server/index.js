@@ -60,7 +60,7 @@ const upload = multer({
     if (extname) return cb(null, true);
     cb(new Error('Only video, image and audio files are allowed'));
   },
-  limits: { fileSize: 200 * 1024 * 1024 } // 200 MB
+  limits: { fileSize: 200 * 1024 * 1024 }
 });
 
 // ── UPLOAD ────────────────────────────────────────────────────────────────────
@@ -136,15 +136,11 @@ app.get('/api/debug-uploads', (req, res) => {
 });
 
 // ── EXPORT VIDEO ──────────────────────────────────────────────────────────────
-// Accepts EITHER:
-//   { tracks: [...], projectName }          ← new App.jsx format
-//   { videoClips: [...], audioClips: [...], projectName }  ← legacy format
 app.post('/api/export-video', express.json(), (req, res) => {
   console.log('🎬 Received async export request');
 
   let { tracks, videoClips, audioClips, projectName = `video-${Date.now()}` } = req.body;
 
-  // Normalise to tracks array (KEEP THIS LOGIC)
   if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
     tracks = [
       { id: 'video-track', type: 'video', name: 'Video Track', clips: videoClips || [] },
@@ -159,32 +155,34 @@ app.post('/api/export-video', express.json(), (req, res) => {
   }
 
   const taskId = uuid();
+  tasks[taskId] = { status: 'processing', outputUrl: null, error: null };
 
-  // Create task
-  tasks[taskId] = {
-    status: "processing",
-    outputUrl: null,
-    error: null
-  };
-
-  // Run export in background
   processVideoAsync(taskId, { tracks, projectName });
 
-  // Respond immediately (IMPORTANT)
-  res.json({
-    taskId,
-    message: "Export started"
-  });
+  res.json({ taskId, message: 'Export started' });
 });
 
-app.get("/api/status/:taskId", (req, res) => {
+// ── TASK STATUS ───────────────────────────────────────────────────────────────
+app.get('/api/status/:taskId', (req, res) => {
   const task = tasks[req.params.taskId];
+  if (!task) return res.status(404).json({ error: 'Invalid task ID' });
+  res.json(task);
+});
 
-  if (!task) {
-    return res.status(404).json({ error: "Invalid task ID" });
+// ── DOWNLOAD ENDPOINT — forces browser download instead of opening in tab ─────
+// Frontend should hit this URL for the actual file download
+app.get('/api/download/:filename', (req, res) => {
+  const filename  = path.basename(req.params.filename); // prevent path traversal
+  const filePath  = path.join(__dirname, 'outputs', filename);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'File not found' });
   }
 
-  res.json(task);
+  // Content-Disposition: attachment forces a Save dialog instead of opening in browser
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Type', 'video/mp4');
+  res.sendFile(filePath);
 });
 
 // ── CLEAR FILES ───────────────────────────────────────────────────────────────
@@ -202,11 +200,9 @@ app.post('/api/clear-files', (req, res) => {
 
 // ── STATIC FILES ──────────────────────────────────────────────────────────────
 app.use('/uploads', express.static('uploads'));
-app.use('/outputs', express.static('outputs'));
+// NOTE: /outputs static is intentionally NOT served — use /api/download/:filename instead
+// so the browser always gets Content-Disposition: attachment
 
-// Serve audio library files
-// Place MP3 files in: backend/public/audio/
-// Required files: chill-lofi.mp3, uplifting-corporate.mp3, cinematic-ambient.mp3
 const audioDir = path.join(__dirname, 'public', 'audio');
 if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true });
 app.use('/audio', (req, res, next) => {
@@ -216,10 +212,11 @@ app.use('/audio', (req, res, next) => {
   next();
 }, express.static(audioDir));
 
-// ── AUDIO LIST ENDPOINT ────────────────────────────────────────────────────────
 app.get('/api/audio-files', (req, res) => {
   try {
-    const files = fs.existsSync(audioDir) ? fs.readdirSync(audioDir).filter(f => /\.(mp3|wav|ogg|m4a)$/i.test(f)) : [];
+    const files = fs.existsSync(audioDir)
+      ? fs.readdirSync(audioDir).filter(f => /\.(mp3|wav|ogg|m4a)$/i.test(f))
+      : [];
     res.json({ success: true, files, audioDir });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -232,19 +229,20 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, error: err.message });
 });
 
-// helper function (NOT a route)
+// ── BACKGROUND PROCESSOR ──────────────────────────────────────────────────────
 async function processVideoAsync(taskId, data) {
   try {
     const outputPath = await videoProcessor.processTimeline(data);
+    const filename   = path.basename(outputPath);
 
-    tasks[taskId].status = "success";
-    tasks[taskId].outputUrl = `/outputs/${path.basename(outputPath)}`;
+    tasks[taskId].status    = 'success';
+    // Return the download API URL so the frontend hits our download endpoint
+    tasks[taskId].outputUrl = `/api/download/${filename}`;
 
-    console.log(`✅ Task ${taskId} completed`);
+    console.log(`✅ Task ${taskId} completed → ${filename}`);
   } catch (err) {
-    tasks[taskId].status = "failed";
-    tasks[taskId].error = err.message;
-
+    tasks[taskId].status = 'failed';
+    tasks[taskId].error  = err.message;
     console.error(`❌ Task ${taskId} failed`, err.message);
   }
 }

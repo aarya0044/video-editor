@@ -167,20 +167,19 @@ export default function App() {
     return;
   }
 
-  const clip = at.clips[0]; // single background track
-  const localTime = playhead - clip.start;
+  const clip = at.clips[0]; // background audio
+  const mediaOffset = clip.mediaOffset || 0;
+  const localTime = mediaOffset + (playhead - clip.start);
 
-  if (localTime < 0 || localTime > clip.duration) {
-    audioEl.pause();
+  if (playhead < clip.start || playhead > clip.end) {
+    if (!audioEl.paused) audioEl.pause();
     return;
   }
 
-  // sync time
   if (Math.abs(audioEl.currentTime - localTime) > 0.3) {
     audioEl.currentTime = localTime;
   }
 
-  // play / pause
   if (isPlaying && audioEl.paused) {
     audioEl.play().catch(() => {});
   }
@@ -204,51 +203,38 @@ useEffect(() => {
 
 
 useEffect(() => {
-  const clip = currentVideoClip;
-  if (!clip) return;
+  const vt = tracks.find(t => t.type === "video");
+  if (!vt) return;
 
-  const el = videoEls.current[clip.id];
+  const activeClip = vt.clips.find(
+    c => playhead >= c.start && playhead < c.end
+  );
+
+  // pause all videos
+  vt.clips.forEach(c => {
+    const el = videoEls.current[c.id];
+    if (el && !el.paused) el.pause();
+  });
+
+  if (!activeClip) return;
+
+  const el = videoEls.current[activeClip.id];
   if (!el) return;
 
-  el.muted = !!clip.muted;
-  el.volume = clip.volume ?? 1;
-}, [currentVideoClip]);
+  const mediaOffset = activeClip.mediaOffset || 0;
+  const localTime = mediaOffset + (playhead - activeClip.start);
 
-
-useEffect(() => {
-  if (!audioRef.current) return;
-
-  const at = tracks.find(t => t.type === "audio");
-  if (!at || !at.clips.length) return;
-
-  const clip = at.clips[0];
-  const localTime = playhead - clip.start;
-
-  if (localTime >= 0 && localTime <= clip.duration) {
-    if (Math.abs(audioRef.current.currentTime - localTime) > 0.25) {
-      audioRef.current.currentTime = localTime;
-    }
+  if (Math.abs(el.currentTime - localTime) > 0.3) {
+    el.currentTime = localTime;
   }
-}, [playhead, tracks]);
 
-
-  /* sync video elements */
-  useEffect(() => {
-    const vt = tracks.find(t => t.type === "video");
-    if (!vt) return;
-    vt.clips.forEach(clip => {
-      const el = videoEls.current[clip.id];
-      if (!el) return;
-      const localTime = playhead - clip.start;
-      if (localTime < 0 || localTime > clip.end - clip.start) {
-        if (!el.paused) el.pause();
-        return;
-      }
-      if (Math.abs(el.currentTime - localTime) > 0.3) el.currentTime = localTime;
-      if (isPlaying && el.paused) el.play().catch(() => {});
-      if (!isPlaying && !el.paused) el.pause();
-    });
-  }, [playhead, isPlaying, tracks]);
+  if (isPlaying && el.paused) {
+    el.play().catch(() => {});
+  }
+  if (!isPlaying && !el.paused) {
+    el.pause();
+  }
+}, [playhead, isPlaying, tracks]);
 
   /* ── FILE UPLOAD ──────────────────────────────────────────────────────── */
   const handleFileUpload = async (e) => {
@@ -284,6 +270,7 @@ useEffect(() => {
   start: Math.max(0, insertAt),
   end: Math.max(0, insertAt) + duration,
   duration,
+  mediaOffset: 0, 
   muted: false,
   volume: 1.0, // ✅ NEW
 };
@@ -318,20 +305,50 @@ useEffect(() => {
   }, []);
 
   /* ── SPLIT ────────────────────────────────────────────────────────────── */
-  const splitAtPlayhead = () => {
-    const vt = tracks.find(t => t.type === "video");
-    if (!vt) return;
-    const clip = vt.clips.find(c => playhead > c.start + 0.05 && playhead < c.end - 0.05);
-    if (!clip) { showNotif("Place playhead over a clip to split", "error"); return; }
-    const left  = { ...clip, end: playhead };
-    const right = { ...clip, id: uid(), start: playhead };
-    setTracks(prev => prev.map(t =>
-      t.id === vt.id
-        ? { ...t, clips: [...t.clips.filter(c => c.id !== clip.id), left, right].sort((a,b) => a.start - b.start) }
-        : t
-    ));
-    showNotif("Clip split");
+const splitAtPlayhead = () => {
+  const vt = tracks.find(t => t.type === "video");
+  if (!vt) return;
+
+  const clip = vt.clips.find(
+    c => playhead > c.start + 0.05 && playhead < c.end - 0.05
+  );
+
+  if (!clip) {
+    showNotif("Place playhead over a clip to split", "error");
+    return;
+  }
+
+  const splitOffset = playhead - clip.start;
+
+  const left = {
+    ...clip,
+    end: playhead
   };
+
+  const right = {
+    ...clip,
+    id: uid(),
+    start: playhead,
+    mediaOffset: (clip.mediaOffset || 0) + splitOffset
+  };
+
+  setTracks(prev =>
+    prev.map(t =>
+      t.id === vt.id
+        ? {
+            ...t,
+            clips: [
+              ...t.clips.filter(c => c.id !== clip.id),
+              left,
+              right
+            ].sort((a, b) => a.start - b.start)
+          }
+        : t
+    )
+  );
+
+  showNotif("Clip split");
+};
 
   /* ── RESIZE ───────────────────────────────────────────────────────────── */
   const startResize = (e, clip, edge, trackId) => {
@@ -446,6 +463,7 @@ useEffect(() => {
   start: insertAt,
   end: insertAt + audio.duration,
   duration: audio.duration,
+  mediaOffset: 0, 
   muted: false,
   volume: 1.0
 };
@@ -507,7 +525,6 @@ useEffect(() => {
 
     setExporting(true);
     try {
-      // Deep-clone so React state proxies are stripped
       const cleanTracks = JSON.parse(JSON.stringify(tracks));
       console.log("📤 Exporting:", cleanTracks.map(t => `${t.type}:${t.clips.length}`).join(", "));
 
@@ -523,16 +540,15 @@ useEffect(() => {
         throw new Error(msg);
       }
 
-      // Server returns a task id immediately — read JSON and start polling
       const d = await response.json();
       const taskId = d?.taskId;
-      if (!taskId) throw new Error(d?.error || 'No task ID returned from server');
+      if (!taskId) throw new Error(d?.error || "No task ID returned from server");
 
-      showNotif('Export started — processing in background');
+      showNotif("Export started — processing in background…");
 
-      // Poll status endpoint until success/failure or timeout
+      // Poll until done
       let attempts = 0;
-      const maxAttempts = 60; // ~3 minutes (60 * 3s)
+      const maxAttempts = 120; // ~6 minutes (120 × 3 s)
       const interval = setInterval(async () => {
         attempts += 1;
         try {
@@ -540,32 +556,46 @@ useEffect(() => {
           if (!statusRes.ok) throw new Error(`Status check failed: ${statusRes.status}`);
           const statusData = await statusRes.json();
 
-          if (statusData.status === 'success') {
+          if (statusData.status === "success") {
             clearInterval(interval);
             setExporting(false);
-            // outputUrl is returned by the server (relative); navigate to it to download
-            const downloadUrl = statusData.outputUrl && statusData.outputUrl.startsWith('http') ? statusData.outputUrl : `${API_URL}${statusData.outputUrl}`;
-            window.location.href = downloadUrl;
-          } else if (statusData.status === 'failed') {
+
+            // Build absolute download URL
+            const downloadUrl = statusData.outputUrl.startsWith("http")
+              ? statusData.outputUrl
+              : `${API_URL}${statusData.outputUrl}`;
+
+            // ✅ Use <a download> so browser saves the file instead of opening it
+            const a = document.createElement("a");
+            a.href = downloadUrl;
+            // Derive a clean filename from the URL
+            a.download = downloadUrl.split("/").pop() || "export.mp4";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            showNotif("✅ Export complete — downloading!");
+          } else if (statusData.status === "failed") {
             clearInterval(interval);
             setExporting(false);
-            showNotif('Export failed', 'error');
-            console.error('Export failed:', statusData.error);
+            showNotif("Export failed — check console for details", "error");
+            console.error("Export failed:", statusData.error);
           } else if (attempts >= maxAttempts) {
             clearInterval(interval);
             setExporting(false);
-            showNotif('Export timed out — try again later', 'error');
+            showNotif("Export timed out — try again", "error");
           }
         } catch (err) {
           clearInterval(interval);
           setExporting(false);
-          showNotif(`Export failed: ${err.message}`, 'error');
-          console.error('Export polling error:', err);
+          showNotif(`Export failed: ${err.message}`, "error");
+          console.error("Export polling error:", err);
         }
       }, 3000);
     } catch (err) {
       console.error("Export error:", err);
       showNotif(`Export failed: ${err.message}`, "error");
+      setExporting(false);
     }
   };
 

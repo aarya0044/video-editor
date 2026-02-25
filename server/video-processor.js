@@ -1,12 +1,21 @@
 import ffmpeg from 'fluent-ffmpeg';
-import ffmpegPath from 'ffmpeg-static';
+import ffmpegStatic from 'ffmpeg-static';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
-if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
+
+// Use system FFmpeg in Docker (has all filters). Fall back to ffmpeg-static locally.
+const SYSTEM_FFMPEG  = '/usr/local/bin/ffmpeg';
+const SYSTEM_FFPROBE = '/usr/local/bin/ffprobe';
+if (fs.existsSync(SYSTEM_FFMPEG)) {
+  ffmpeg.setFfmpegPath(SYSTEM_FFMPEG);
+  ffmpeg.setFfprobePath(SYSTEM_FFPROBE);
+} else if (ffmpegStatic) {
+  ffmpeg.setFfmpegPath(ffmpegStatic);
+}
 
 class VideoProcessor {
   constructor() {
@@ -32,12 +41,13 @@ class VideoProcessor {
       const filename = decodeURIComponent(raw.slice(uIdx + '/uploads/'.length));
       const full = path.join(this.uploadsDir, filename);
       if (fs.existsSync(full)) return full;
-      // fuzzy match — multer may add timestamp
       const ext   = path.extname(filename).toLowerCase();
       const base  = path.basename(filename, ext);
       const match = fs.readdirSync(this.uploadsDir).find(f =>
         path.extname(f).toLowerCase() === ext &&
-        (f === filename || path.basename(f, path.extname(f)).startsWith(base) || base.startsWith(path.basename(f, path.extname(f))))
+        (f === filename ||
+          path.basename(f, path.extname(f)).startsWith(base) ||
+          base.startsWith(path.basename(f, path.extname(f))))
       );
       if (match) return path.join(this.uploadsDir, match);
     }
@@ -53,120 +63,229 @@ class VideoProcessor {
     return null;
   }
 
-  // ── Escape text for -vf drawtext ─────────────────────────────────────────
-  // Rules for -vf (NOT filter_complex — different escaping):
-  //   backslash → \\   apostrophe → \'   colon → \:
-  escapeForVf(text) {
-  return String(text)
-    .replace(/\\/g, '\\\\')   // backslash
-    .replace(/:/g, '\\:')     // colon
-    .replace(/'/g, "\\'")     // single quote
-    .replace(/,/g, '\\,')     // comma
-    .replace(/\n/g, ' ')      // newlines
-    .replace(/\r/g, ' ');
-}
+  // ── Build an ASS subtitle file from text track clips ─────────────────────
+  // Uses the ASS subtitles filter instead of drawtext (drawtext needs libfreetype
+  // which is not available in standard Ubuntu apt FFmpeg builds).
+  buildAssFile(textClips, outputPath) {
+    const lines = [];
 
+    lines.push('[Script Info]');
+    lines.push('ScriptType: v4.00+');
+    lines.push('PlayResX: 1280');
+    lines.push('PlayResY: 720');
+    lines.push('WrapStyle: 0');
+    lines.push('');
+    lines.push('[V4+ Styles]');
+    lines.push(
+      'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, ' +
+      'OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ' +
+      'ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, ' +
+      'Alignment, MarginL, MarginR, MarginV, Encoding'
+    );
 
+    const dialogueLines = [];
 
-  // ── Build drawtext filter string (for use with -vf only) ─────────────────
-  buildDrawtext(clip, startSec, endSec) {
-  const ov = clip.textOverlay;
-  if (!ov?.enabled || !ov.text?.trim()) return null;
+    for (const clip of textClips) {
+      const ov = clip.textOverlay;
+      if (!ov || !ov.enabled || !ov.text || !ov.text.trim()) continue;
 
-  const text = this.escapeForVf(ov.text.trim());
+      const fontSize = Math.max(8, parseInt(ov.fontSize) || 32);
 
-  const fontSize  = Math.max(8, parseInt(ov.fontSize) || 32);
-  const fontColor = (ov.fontColor || '#ffffff').replace(/^#/, '0x');
+      // Convert #rrggbb → ASS &H00BBGGRR
+      const hex = (ov.fontColor || '#ffffff').replace('#', '').padEnd(6, '0');
+      const r = hex.slice(0, 2);
+      const g = hex.slice(2, 4);
+      const b = hex.slice(4, 6);
+      const primaryColour = ('&H00' + b + g + r).toUpperCase();
 
-  let x, y;
-  if (ov.position === 'custom' && ov.px != null && ov.py != null) {
-    x = `(w*${(ov.px / 100).toFixed(4)}-text_w/2)`;
-    y = `(h*${(ov.py / 100).toFixed(4)}-text_h/2)`;
-  } else {
-    switch (ov.position) {
-      case 'top-left':     x = '20';            y = '20';            break;
-      case 'top-right':    x = 'w-text_w-20';   y = '20';            break;
-      case 'bottom-left':  x = '20';            y = 'h-text_h-20';   break;
-      case 'bottom-right': x = 'w-text_w-20';   y = 'h-text_h-20';   break;
-      default:             x = '(w-text_w)/2';  y = '(h-text_h)/2';  break;
+      // ASS alignment numbers:
+      // 7=top-left  8=top-center  9=top-right
+      // 4=mid-left  5=mid-center  6=mid-right
+      // 1=bot-left  2=bot-center  3=bot-right
+      let alignment = 5;
+      switch (ov.position) {
+        case 'top-left':     alignment = 7; break;
+        case 'top-right':    alignment = 9; break;
+        case 'bottom-left':  alignment = 1; break;
+        case 'bottom-right': alignment = 3; break;
+        default:             alignment = 5; break;
+      }
+
+      const styleName = 'S' + clip.id.replace(/[^a-zA-Z0-9]/g, '_');
+
+      lines.push(
+        'Style: ' + styleName + ',Arial,' + fontSize + ',' +
+        primaryColour + ',&H000000FF,&H00000000,&H80000000,' +
+        '0,0,0,0,100,100,0,0,1,2,1,' + alignment + ',10,10,10,1'
+      );
+
+      // Format seconds → H:MM:SS.cc  (ASS centiseconds)
+      const fmtT = (s) => {
+        const h  = Math.floor(s / 3600);
+        const m  = Math.floor((s % 3600) / 60);
+        const sc = s % 60;
+        const cs = Math.floor((sc - Math.floor(sc)) * 100);
+        return (
+          h + ':' +
+          String(m).padStart(2, '0') + ':' +
+          String(Math.floor(sc)).padStart(2, '0') + '.' +
+          String(cs).padStart(2, '0')
+        );
+      };
+
+      // For custom positions use \pos(x,y) override tag
+      // ASS coords: x=0..1280, y=0..720
+      let posTag = '';
+      if (ov.position === 'custom' && ov.px != null && ov.py != null) {
+        const ax = Math.round(ov.px * 12.8);
+        const ay = Math.round(ov.py * 7.2);
+        posTag = '{\\pos(' + ax + ',' + ay + ')}';
+      }
+
+      const safeText = String(ov.text)
+        .replace(/\r\n/g, '\\N')
+        .replace(/\n/g, '\\N')
+        .replace(/\r/g, '\\N');
+
+      dialogueLines.push(
+        'Dialogue: 0,' +
+        fmtT(clip.start) + ',' +
+        fmtT(clip.end) + ',' +
+        styleName + ',,0,0,0,,' +
+        posTag + safeText
+      );
     }
+
+    if (dialogueLines.length === 0) return false;
+
+    lines.push('');
+    lines.push('[Events]');
+    lines.push(
+      'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
+    );
+    dialogueLines.forEach(d => lines.push(d));
+
+    fs.writeFileSync(outputPath, lines.join('\n'), 'utf8');
+    return true;
   }
 
-  const enable =
-    startSec != null && endSec != null
-      ? `:enable=between(t\\,${startSec}\\,${endSec})`
-      : '';
-
-  return `drawtext=text='${text}':fontsize=${fontSize}:fontcolor=${fontColor}` +
-         `:x=${x}:y=${y}:box=1:boxcolor=black@0.5:boxborderw=8${enable}`;
-}
-
   // ── Render one video/image clip → normalised 1280×720 MP4 ────────────────
+  // Always outputs BOTH video and audio streams.
   processVideoClip(clip, outputPath) {
     return new Promise((resolve, reject) => {
       const localPath = this.resolveFilePath(clip);
-      if (!localPath) return reject(new Error(`File not found: "${clip.name}" (${clip.src})`));
+      if (!localPath) {
+        return reject(new Error('File not found: "' + clip.name + '" (' + clip.src + ')'));
+      }
 
       const duration = clip.end - clip.start;
-      if (duration <= 0.01) return reject(new Error(`Zero duration: "${clip.name}"`));
+      if (duration <= 0.01) {
+        return reject(new Error('Zero duration: "' + clip.name + '"'));
+      }
 
-      const isImage = clip.type?.includes('image') || /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(localPath);
+      const sourceStart = clip.mediaOffset || 0;
+      const isImage = clip.type?.includes('image') ||
+        /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(localPath);
       const isMuted = clip.muted === true;
+      const volume  = clip.volume != null ? clip.volume : 1.0;
 
-      const SCALE = 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1';
+      const SCALE =
+        'scale=1280:720:force_original_aspect_ratio=decrease,' +
+        'pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1';
+      const INPUT_GENPTS  = ['-fflags', '+genpts'];
+      const OUTPUT_TS_FIX = ['-avoid_negative_ts', 'make_zero'];
 
       let cmd = ffmpeg();
 
       if (isImage) {
-  cmd
-    .input(localPath)
-    .inputOptions(['-loop', '1', '-framerate', '30'])
-    .input('anullsrc=r=44100:cl=stereo')
-    .inputOptions(['-f', 'lavfi'])
-    .outputOptions([
-      '-t', String(duration),
-      '-vf', SCALE,
-      '-c:v', 'libx264',
-      '-c:a', 'aac',
-      '-pix_fmt', 'yuv420p',
-      '-r', '30',
-      '-ar', '44100',
-      '-ac', '2',
-      '-shortest'
-    ]);
-      } else if (isMuted) {
-        // Muted video: strip audio track entirely
-        cmd.input(localPath).inputOptions(['-ss', String(clip.trimStart || 0)])
+        // Loop image + generate silence via aevalsrc (no lavfi format needed)
+        cmd
+          .input(localPath)
+          .inputOptions(['-loop', '1', '-framerate', '30', ...INPUT_GENPTS])
+          .complexFilter([
+            '[0:v]' + SCALE + '[v]',
+            'aevalsrc=0:channel_layout=stereo:sample_rate=44100[a]'
+          ])
           .outputOptions([
-            '-t', String(duration), '-vf', SCALE,
-            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', '30', '-an'
+            '-map', '[v]',
+            '-map', '[a]',
+            '-t', String(duration),
+            '-c:v', 'libx264',
+            '-c:a', 'aac',
+            '-pix_fmt', 'yuv420p',
+            '-r', '30',
+            '-ar', '44100',
+            '-ac', '2',
+            ...OUTPUT_TS_FIX
           ]);
-      } else {
-        cmd.input(localPath).inputOptions(['-ss', String(clip.trimStart || 0)])
+
+      } else if (isMuted) {
+        // Muted video: replace audio with silence
+        cmd
+          .input(localPath)
+          .inputOptions(['-ss', String(sourceStart), ...INPUT_GENPTS])
+          .complexFilter([
+            '[0:v]' + SCALE + '[v]',
+            'aevalsrc=0:channel_layout=stereo:sample_rate=44100[a]'
+          ])
           .outputOptions([
-            '-t', String(duration), '-vf', SCALE,
-            '-c:v', 'libx264', '-c:a', 'aac',
-            '-pix_fmt', 'yuv420p', '-r', '30', '-ar', '44100', '-ac', '2'
+            '-map', '[v]',
+            '-map', '[a]',
+            '-t', String(duration),
+            '-c:v', 'libx264',
+            '-c:a', 'aac',
+            '-pix_fmt', 'yuv420p',
+            '-r', '30',
+            '-ar', '44100',
+            '-ac', '2',
+            ...OUTPUT_TS_FIX
+          ]);
+
+      } else {
+        // Normal video: keep audio, apply volume
+        cmd
+          .input(localPath)
+          .inputOptions(['-ss', String(sourceStart), ...INPUT_GENPTS])
+          .outputOptions([
+            '-t', String(duration),
+            '-vf', SCALE,
+            '-af', 'volume=' + volume,
+            '-c:v', 'libx264',
+            '-c:a', 'aac',
+            '-pix_fmt', 'yuv420p',
+            '-r', '30',
+            '-ar', '44100',
+            '-ac', '2',
+            ...OUTPUT_TS_FIX
           ]);
       }
 
       cmd.output(outputPath)
-        .on('start', c => console.log(`  [clip] ${c.slice(0, 140)}`))
+        .on('start', c => console.log('  [clip] ' + c.slice(0, 140)))
         .on('end', () => resolve(outputPath))
-        .on('error', err => reject(new Error(`clip: ${err.message}`)))
+        .on('error', err => reject(new Error('clip: ' + err.message)))
         .run();
     });
   }
 
-  // ── Add silent audio to video-only mp4 ───────────────────────────────────
+  // ── Add silent audio to a video-only file ────────────────────────────────
   addSilentAudio(inputPath, outputPath) {
     return new Promise((resolve, reject) => {
       ffmpeg(inputPath)
-        .input('anullsrc=r=44100:cl=stereo').inputOptions(['-f', 'lavfi'])
-        .outputOptions(['-c:v', 'copy', '-c:a', 'aac', '-shortest', '-ar', '44100', '-ac', '2'])
+        .complexFilter(['aevalsrc=0:channel_layout=stereo:sample_rate=44100[a]'])
+        .outputOptions([
+          '-map', '0:v',
+          '-map', '[a]',
+          '-c:v', 'copy',
+          '-c:a', 'aac',
+          '-shortest',
+          '-ar', '44100',
+          '-ac', '2'
+        ])
         .output(outputPath)
         .on('end', () => resolve(outputPath))
-        .on('error', reject).run();
+        .on('error', reject)
+        .run();
     });
   }
 
@@ -180,44 +299,44 @@ class VideoProcessor {
     });
   }
 
-  // ── Concatenate clips ─────────────────────────────────────────────────────
-  // ── Concatenate clips using concat demuxer (stream copy) ─────────────────
-concatDemuxer(inputPaths, outputPath) {
-  return new Promise((resolve, reject) => {
-    if (inputPaths.length === 1) {
-      fs.copyFileSync(inputPaths[0], outputPath);
-      return resolve(outputPath);
-    }
+  // ── Concatenate clips using concat demuxer ────────────────────────────────
+  concatDemuxer(inputPaths, outputPath) {
+    return new Promise((resolve, reject) => {
+      if (inputPaths.length === 1) {
+        fs.copyFileSync(inputPaths[0], outputPath);
+        return resolve(outputPath);
+      }
 
-    // Create a temporary file list
-    const listPath = path.join(this.tempDir, `concat-${Date.now()}.txt`);
-    const listContent = inputPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
-    fs.writeFileSync(listPath, listContent);
+      const listPath = path.join(this.tempDir, 'concat-' + Date.now() + '.txt');
+      const listContent = inputPaths
+        .map(p => "file '" + p.replace(/'/g, "'\\''") + "'")
+        .join('\n');
+      fs.writeFileSync(listPath, listContent);
 
-    ffmpeg()
-      .input(listPath)
-      .inputOptions(['-f', 'concat', '-safe', '0'])
-      .outputOptions(['-c', 'copy'])   // stream copy, no re-encoding
-      .output(outputPath)
-      .on('start', c => console.log(`  [concat] ${c.slice(0, 140)}`))
-      .on('end', () => {
-        try { fs.unlinkSync(listPath); } catch {}
-        resolve(outputPath);
-      })
-      .on('error', err => {
-        try { fs.unlinkSync(listPath); } catch {}
-        reject(new Error(`concat demuxer: ${err.message}`));
-      })
-      .run();
-  });
-}
+      ffmpeg()
+        .input(listPath)
+        .inputOptions(['-f', 'concat', '-safe', '0'])
+        .outputOptions(['-c:v', 'libx264', '-c:a', 'aac'])
+        .output(outputPath)
+        .on('start', c => console.log('  [concat] ' + c.slice(0, 140)))
+        .on('end', () => {
+          try { fs.unlinkSync(listPath); } catch (_) {}
+          resolve(outputPath);
+        })
+        .on('error', err => {
+          try { fs.unlinkSync(listPath); } catch (_) {}
+          reject(new Error('concat demuxer: ' + err.message));
+        })
+        .run();
+    });
+  }
 
-  // ── Run ffmpeg command as promise ─────────────────────────────────────────
+  // ── Run an ffmpeg command as a promise ────────────────────────────────────
   _run(cmd) {
     return new Promise((resolve, reject) => {
       cmd
-        .on('start', c => console.log(`  [ffmpeg] ${c.slice(0, 140)}`))
-        .on('end',   () => { console.log('  ✓ done'); resolve(); })
+        .on('start', c => console.log('  [ffmpeg] ' + c.slice(0, 140)))
+        .on('end', () => { console.log('  ✓ done'); resolve(); })
         .on('error', err => { console.error('  ✗', err.message); reject(err); })
         .run();
     });
@@ -228,11 +347,16 @@ concatDemuxer(inputPaths, outputPath) {
   // ═══════════════════════════════════════════════════════════════════════════
   async processTimeline({ tracks, projectName }) {
     this.ensureDirs();
-    const outputPath = path.join(this.outputsDir, `${projectName}.mp4`);
+
+    const timelineEnd = Math.max(
+      ...tracks.flatMap(t => t.clips.map(c => c.end))
+    );
+
+    const outputPath = path.join(this.outputsDir, projectName + '.mp4');
     const cleanup    = [];
 
-    console.log(`\n🎬 Exporting: ${projectName}`);
-    tracks.forEach(t => console.log(`  ${t.type}: ${t.clips?.length || 0} clips`));
+    console.log('\n🎬 Exporting: ' + projectName);
+    tracks.forEach(t => console.log('  ' + t.type + ': ' + (t.clips?.length || 0) + ' clips'));
 
     const videoTrack = tracks.find(t => t.type === 'video');
     const audioTrack = tracks.find(t => t.type === 'audio');
@@ -240,200 +364,227 @@ concatDemuxer(inputPaths, outputPath) {
 
     if (!videoTrack?.clips?.length) throw new Error('No video clips in timeline');
 
-    // ── STEP 1: Render each video/image clip ────────────────────────────────
+    // ── STEP 1: Render each video/image clip ─────────────────────────────
     console.log('\n📽  Rendering clips…');
     const sorted        = [...videoTrack.clips].sort((a, b) => a.start - b.start);
     const renderedPaths = [];
 
     for (let i = 0; i < sorted.length; i++) {
       const clip = sorted[i];
-      const p    = path.join(this.tempDir, `clip${i}_${Date.now()}.mp4`);
+      const p    = path.join(this.tempDir, 'clip' + i + '_' + Date.now() + '.mp4');
       cleanup.push(p);
-      console.log(`  [${i+1}/${sorted.length}] "${clip.name}" muted=${!!clip.muted}`);
+      console.log(
+        '  [' + (i + 1) + '/' + sorted.length + '] "' +
+        clip.name + '" muted=' + !!clip.muted +
+        ' volume=' + (clip.volume ?? 1)
+      );
       try {
         await this.processVideoClip(clip, p);
         renderedPaths.push(p);
       } catch (e) {
-        console.error(`  ⚠️  Skipped: ${e.message}`);
+        console.error('  ⚠️  Skipped: ' + e.message);
       }
     }
+
     if (!renderedPaths.length) throw new Error('None of the video clips could be processed');
 
-    // ── STEP 2: Normalise — every clip must have (or not have) audio ────────
-    console.log('\n🔊 Normalising audio streams…');
-    const checks      = await Promise.all(renderedPaths.map(p => this.hasAudioStream(p)));
-    const anyHasAudio = checks.some(Boolean);
-    let readyPaths    = renderedPaths;
-
-    if (anyHasAudio) {
-      readyPaths = [];
-      for (let i = 0; i < renderedPaths.length; i++) {
-        if (!checks[i]) {
-          const p2 = path.join(this.tempDir, `clip${i}_sa_${Date.now()}.mp4`);
-          cleanup.push(p2);
-          await this.addSilentAudio(renderedPaths[i], p2);
-          readyPaths.push(p2);
-        } else {
-          readyPaths.push(renderedPaths[i]);
-        }
-      }
-    }
-
-    // ── STEP 3: Concatenate ─────────────────────────────────────────────────
+    // ── STEP 2: Concatenate ───────────────────────────────────────────────
     console.log('\n🔗 Concatenating…');
-    const concatPath = path.join(this.tempDir, `concat_${Date.now()}.mp4`);
+    const concatPath = path.join(this.tempDir, 'concat_' + Date.now() + '.mp4');
     cleanup.push(concatPath);
-    await this.concatDemuxer(readyPaths, concatPath);
+    await this.concatDemuxer(renderedPaths, concatPath);
 
-    // ── STEP 4: Process external audio track ───────────────────────────────
+    // ── STEP 3: Process external audio track ─────────────────────────────
     console.log('\n🎵 Processing audio track…');
     const extAudio = [];
+
     if (audioTrack?.clips?.length) {
-      for (const [i, clip] of audioTrack.clips.entries()) {
-        const lp = this.resolveFilePath(clip);
-        if (!lp) { console.warn(`  ⚠️  Audio not found: "${clip.name}"`); continue; }
-        const ap = path.join(this.tempDir, `ext_audio${i}_${Date.now()}.aac`);
+      for (let i = 0; i < audioTrack.clips.length; i++) {
+        const clip = audioTrack.clips[i];
+        const lp   = this.resolveFilePath(clip);
+        if (!lp) { console.warn('  ⚠️  Audio not found: "' + clip.name + '"'); continue; }
+
+        const sourceStart = clip.mediaOffset || 0;
+        const duration    = clip.end - clip.start;
+        const volume      = clip.muted ? 0 : (clip.volume ?? 1.0);
+        const ap = path.join(this.tempDir, 'ext_audio' + i + '_' + Date.now() + '.aac');
         cleanup.push(ap);
+
         try {
           await this._run(
             ffmpeg(lp)
-              .outputOptions(['-t', String(clip.end - clip.start), '-c:a', 'aac', '-ar', '44100', '-ac', '2', '-vn'])
+              .inputOptions(['-ss', String(sourceStart)])
+              .audioFilters('volume=' + volume)
+              .outputOptions([
+                '-t', String(duration),
+                '-c:a', 'aac',
+                '-ar', '44100',
+                '-ac', '2',
+                '-vn'
+              ])
               .output(ap)
           );
-          extAudio.push(ap);
-          console.log(`  ✓ "${clip.name}"`);
+          extAudio.push({ path: ap, start: clip.start, end: clip.end });
+          console.log('  ✓ "' + clip.name + '" vol=' + volume);
         } catch (e) {
-          console.error(`  ⚠️  Audio "${clip.name}": ${e.message}`);
+          console.error('  ⚠️  Audio "' + clip.name + '": ' + e.message);
         }
       }
     }
 
-    // ── STEP 5: Build text overlay filters ─────────────────────────────────
-    // CRITICAL: Use clip.start/end as timeline seconds for the enable expression.
-    // These go into -vf, NOT filter_complex, so NO backslash-escaping of commas.
-    const textFilters = [];
+    // ── STEP 4: Build ASS subtitle file ──────────────────────────────────
+    // Uses subtitles filter (libass) instead of drawtext (libfreetype not in apt FFmpeg)
+    let assPath = null;
     if (textTrack?.clips?.length) {
-      for (const clip of textTrack.clips) {
-        const dt = this.buildDrawtext(clip, clip.start, clip.end);
-        if (dt) {
-          console.log(`  Text: "${clip.textOverlay?.text}" @ ${clip.start}s–${clip.end}s`);
-          textFilters.push(dt);
-        }
+      const ap = path.join(this.tempDir, 'subs_' + Date.now() + '.ass');
+      const written = this.buildAssFile(textTrack.clips, ap);
+      if (written) {
+        assPath = ap;
+        cleanup.push(ap);
+        console.log('\n📝 ASS subtitle file: ' + ap);
+        textTrack.clips.forEach(c => {
+          if (c.textOverlay?.text) {
+            console.log(
+              '  Text: "' + c.textOverlay.text +
+              '" @ ' + c.start + 's–' + c.end + 's'
+            );
+          }
+        });
       }
     }
 
-    // ── STEP 6: Final composition ───────────────────────────────────────────
+    // ── STEP 5: Final composition ─────────────────────────────────────────
     console.log('\n✂️  Final composition…');
-    console.log(`  hasText=${textFilters.length > 0}, hasExtAudio=${extAudio.length > 0}`);
-
-    const hasText = textFilters.length > 0;
+    const hasText = !!assPath;
     const hasExt  = extAudio.length > 0;
+    console.log('  hasText=' + hasText + ', hasExtAudio=' + hasExt);
 
-    // ── A: Video only — just re-encode cleanly ──────────────────────────────
+    // Escape ASS path for ffmpeg filter string (forward slashes, escape colons)
+    const escAss = p => p.replace(/\\/g, '/').replace(/:/g, '\\:');
+
     if (!hasText && !hasExt) {
-      await this._run(
-        ffmpeg(concatPath)
-          .outputOptions(['-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', '-movflags', '+faststart'])
-          .output(outputPath)
-      );
-
-    // ── B: Text only — -vf drawtext, no filter_complex ─────────────────────
-    } else if (hasText && !hasExt) {
-      const vfStr = textFilters.join(',');
-      console.log(`  -vf: ${vfStr.slice(0, 120)}`);
+      // A: Video only
       await this._run(
         ffmpeg(concatPath)
           .outputOptions([
-            '-vf', vfStr,
-            '-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', '-movflags', '+faststart'
+            '-t', String(timelineEnd),
+            '-c:v', 'libx264',
+            '-c:a', 'aac',
+            '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart'
           ])
           .output(outputPath)
       );
 
-    // ── C: External audio only — amix in filter_complex ────────────────────
-    } else if (!hasText && hasExt) {
-      await this._mixAudio(concatPath, extAudio, outputPath);
-
-    // ── D: Both text AND external audio — two-pass ─────────────────────────
-    } else {
-      const midPath = path.join(this.tempDir, `textpass_${Date.now()}.mp4`);
-      cleanup.push(midPath);
-
-      // Pass 1: burn text with -vf
-      const vfStr = textFilters.join(',');
-      console.log(`  Pass1 -vf: ${vfStr.slice(0, 120)}`);
+    } else if (hasText && !hasExt) {
+      // B: Text only — burn subtitles
+      console.log('  Burning subtitles: ' + assPath);
       await this._run(
         ffmpeg(concatPath)
-          .outputOptions(['-vf', vfStr, '-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p'])
+          .outputOptions([
+            '-t', String(timelineEnd),
+            '-vf', "subtitles='" + escAss(assPath) + "'",
+            '-c:v', 'libx264',
+            '-c:a', 'aac',
+            '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart'
+          ])
+          .output(outputPath)
+      );
+
+    } else if (!hasText && hasExt) {
+      // C: External audio only
+      await this._mixAudio(concatPath, extAudio, outputPath, timelineEnd);
+
+    } else {
+      // D: Text + external audio — two passes
+      const midPath = path.join(this.tempDir, 'textpass_' + Date.now() + '.mp4');
+      cleanup.push(midPath);
+
+      console.log('  Pass 1: burning subtitles');
+      await this._run(
+        ffmpeg(concatPath)
+          .outputOptions([
+            '-t', String(timelineEnd),
+            '-vf', "subtitles='" + escAss(assPath) + "'",
+            '-c:v', 'libx264',
+            '-c:a', 'aac',
+            '-pix_fmt', 'yuv420p'
+          ])
           .output(midPath)
       );
 
-      // Pass 2: mix audio
-      await this._mixAudio(midPath, extAudio, outputPath);
+      console.log('  Pass 2: mixing audio');
+      await this._mixAudio(midPath, extAudio, outputPath, timelineEnd);
     }
 
-    // ── Cleanup temp files ──────────────────────────────────────────────────
-    cleanup.forEach(p => { try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch {} });
-    console.log(`\n✅ Exported: ${outputPath}`);
+    // ── Cleanup temp files ────────────────────────────────────────────────
+    cleanup.forEach(p => {
+      try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch (_) {}
+    });
+
+    console.log('\n✅ Exported: ' + outputPath);
     return outputPath;
   }
 
-  // ── Mix external audio files into a video source ─────────────────────────
-  async _mixAudio(videoPath, extAudioPaths, outputPath) {
-  const videoHasAudio = await this.hasAudioStream(videoPath);
-  const n = extAudioPaths.length;
+  // ── Mix external audio clips into a video file ────────────────────────────
+  async _mixAudio(videoPath, extAudioItems, outputPath, timelineEnd) {
+    const videoHasAudio = await this.hasAudioStream(videoPath);
+    const n = extAudioItems.length;
 
-  let cmd = ffmpeg(videoPath);
-  extAudioPaths.forEach(p => cmd.input(p));
+    const cmd = ffmpeg(videoPath);
+    extAudioItems.forEach(item => cmd.input(item.path));
 
-  const filterParts = [];
-  const audioInputLabels = [];
+    const filterParts      = [];
+    const audioInputLabels = [];
 
-  // Convert video's audio (if present) to standard format
-  if (videoHasAudio) {
-    filterParts.push(`[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[0a]`);
-    audioInputLabels.push('[0a]');
-  }
+    if (videoHasAudio) {
+      filterParts.push(
+        '[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[0a]'
+      );
+      audioInputLabels.push('[0a]');
+    }
 
-  // Convert each external audio to standard format
-  for (let i = 0; i < n; i++) {
-    filterParts.push(`[${i + 1}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[${i + 1}a]`);
-    audioInputLabels.push(`[${i + 1}a]`);
-  }
+    for (let i = 0; i < n; i++) {
+      const delayMs = Math.round(extAudioItems[i].start * 1000);
+      filterParts.push(
+        '[' + (i + 1) + ':a]' +
+        'aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,' +
+        'adelay=' + delayMs + '|' + delayMs +
+        '[' + (i + 1) + 'a]'
+      );
+      audioInputLabels.push('[' + (i + 1) + 'a]');
+    }
 
-  // If no audio at all, just copy video (shouldn't happen)
-  if (audioInputLabels.length === 0) {
-    await this._run(
-      ffmpeg(videoPath)
-        .outputOptions(['-c', 'copy'])
-        .output(outputPath)
+    if (audioInputLabels.length === 0) {
+      await this._run(ffmpeg(videoPath).outputOptions(['-c', 'copy']).output(outputPath));
+      return;
+    }
+
+    const amixInputs = audioInputLabels.join('');
+    filterParts.push(
+      amixInputs +
+      'amix=inputs=' + audioInputLabels.length +
+      ':duration=longest:dropout_transition=2:normalize=0[aout]'
     );
-    return;
+
+    cmd
+      .complexFilter(filterParts.join(';'))
+      .outputOptions([
+        '-t', String(timelineEnd),
+        '-map', '0:v',
+        '-map', '[aout]',
+        '-c:v', 'libx264',
+        '-c:a', 'aac',
+        '-pix_fmt', 'yuv420p',
+        '-ar', '44100',
+        '-ac', '2',
+        '-movflags', '+faststart'
+      ])
+      .output(outputPath);
+
+    await this._run(cmd);
   }
-
-  // Build the amix filter
-  const amixInputs = audioInputLabels.join('');
-  const amixFilter = `${amixInputs}amix=inputs=${audioInputLabels.length}:duration=first:dropout_transition=2[aout]`;
-  filterParts.push(amixFilter);
-
-  const filterGraph = filterParts.join(';');
-
-  cmd
-    .complexFilter(filterGraph)
-    .outputOptions([
-      '-map', '0:v',
-      '-map', '[aout]',
-      '-c:v', 'libx264',
-      '-c:a', 'aac',
-      '-pix_fmt', 'yuv420p',
-      '-ar', '44100',
-      '-ac', '2',
-      '-movflags', '+faststart'
-    ])
-    .output(outputPath);
-
-  await this._run(cmd);
-}
 }
 
 export default VideoProcessor;
