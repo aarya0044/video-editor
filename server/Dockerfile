@@ -29,5 +29,5 @@ COPY server/ .
 
 RUN mkdir -p uploads outputs temp public/audio
 
-EXPOSE 5000
+EXPOSE 8000
 CMD ["node", "index.js"]
