@@ -6,8 +6,6 @@ const API_URL =
   "http://localhost:5000";
 
 /* ─── AUDIO LIBRARY ───────────────────────────────────────────────────────── */
-// Place mp3 files in backend/public/audio/ and serve with:
-//   app.use('/audio', express.static(path.join(__dirname, 'public', 'audio')))
 const _AUDIO_FILES = [
   { id: 1, name: "Chill Lofi Beat",     artist: "Pixabay", duration: 132, category: "Lofi",      color: "#3b82f6", file: "chill-lofi.mp3" },
   { id: 2, name: "Uplifting Corporate", artist: "Pixabay", duration: 120, category: "Upbeat",    color: "#10b981", file: "uplifting-corporate.mp3" },
@@ -53,7 +51,6 @@ const getVideoDuration = (url) => new Promise(res => {
   v.src = url;
 });
 
-
 /* ─── POSITION MAP ────────────────────────────────────────────────────────── */
 const POS_MAP = {
   "center":       { x: 50, y: 50 },
@@ -86,10 +83,10 @@ export default function App() {
   const [movingClip,    setMovingClip]    = useState(null);
   const [draggingText,  setDraggingText]  = useState(null);
   const [notification,  setNotification]  = useState(null);
-  const [draggingFile,   setDraggingFile]   = useState(null);
-  const [fullPreview,    setFullPreview]    = useState(false); // full-screen preview mode
-  const fullVideoRef = useRef(null); // video el for full preview
-  const [previewingAudio, setPreviewingAudio] = useState(null); // audio id currently playing preview
+  const [draggingFile,  setDraggingFile]  = useState(null);
+  const [fullPreview,   setFullPreview]   = useState(false);
+  const fullVideoRef = useRef(null);
+  const [previewingAudio, setPreviewingAudio] = useState(null);
   const audioPreviewRef = useRef(null);
 
   const fileInputRef = useRef(null);
@@ -99,9 +96,8 @@ export default function App() {
   const previewRef   = useRef(null);
   const videoEls     = useRef({});
 
+  // ── FIX: audioRef is ALWAYS mounted — never conditional ──────────────────
   const audioRef = useRef(null);
-  const [previewAudio, setPreviewAudio] = useState(null);
-
 
   /* derived */
   const pixelsPerSecond = 60 * zoom;
@@ -153,91 +149,93 @@ export default function App() {
     return () => cancelAnimationFrame(animRef.current);
   }, [isPlaying, totalDuration]);
 
+  /* ── AUDIO SYNC ───────────────────────────────────────────────────────────
+     FIX: Single combined useEffect. audioRef is always mounted so this
+     always works. We set .src directly when the clip changes — no state needed.
+  ─────────────────────────────────────────────────────────────────────────── */
   useEffect(() => {
-  const audioEl = audioRef.current;
-  if (!audioEl) return;
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
 
-  const at = tracks.find(t => t.type === "audio");
-  if (!at || !at.clips.length) {
-    audioEl.pause();
-    return;
-  }
+    const at = tracks.find(t => t.type === "audio");
+    const clip = at?.clips?.[0];
 
-  const clip = at.clips[0]; // background audio
-  const mediaOffset = clip.mediaOffset || 0;
-  const localTime = mediaOffset + (playhead - clip.start);
+    if (!clip) {
+      // No audio clip — stop and clear
+      audioEl.pause();
+      audioEl.src = "";
+      return;
+    }
 
-  if (playhead < clip.start || playhead > clip.end) {
-    if (!audioEl.paused) audioEl.pause();
-    return;
-  }
+    // Update src if it changed (handles adding a new track or changing tracks)
+    const clipSrc = clip.src || clip.url || "";
+    if (clipSrc && audioEl.getAttribute("data-clip-src") !== clipSrc) {
+      audioEl.src = clipSrc;
+      audioEl.load();
+      audioEl.setAttribute("data-clip-src", clipSrc);
+    }
 
-  if (Math.abs(audioEl.currentTime - localTime) > 0.3) {
-    audioEl.currentTime = localTime;
-  }
+    // Always sync volume/mute
+    audioEl.muted  = !!clip.muted;
+    audioEl.volume = clip.volume ?? 1;
 
-  if (isPlaying && audioEl.paused) {
-    audioEl.play().catch(() => {});
-  }
-  if (!isPlaying && !audioEl.paused) {
-    audioEl.pause();
-  }
-}, [playhead, isPlaying, tracks]);
+    // Compute where in the audio file we should be
+    const mediaOffset = clip.mediaOffset || 0;
+    const localTime   = mediaOffset + (playhead - clip.start);
 
-useEffect(() => {
-  const audioEl = audioRef.current;
-  if (!audioEl) return;
+    // Playhead is outside this clip's range — pause
+    if (playhead < clip.start || playhead >= clip.end) {
+      if (!audioEl.paused) audioEl.pause();
+      return;
+    }
 
-  const at = tracks.find(t => t.type === "audio");
-  const clip = at?.clips?.[0];
-  if (!clip) return;
+    // Seek if drifted more than 300ms
+    if (Math.abs(audioEl.currentTime - localTime) > 0.3) {
+      audioEl.currentTime = Math.max(0, localTime);
+    }
 
-  audioEl.muted = !!clip.muted;
-  audioEl.volume = clip.volume ?? 1;
-}, [tracks]);
+    if (isPlaying && audioEl.paused) {
+      audioEl.play().catch(() => {});
+    }
+    if (!isPlaying && !audioEl.paused) {
+      audioEl.pause();
+    }
+  }, [playhead, isPlaying, tracks]);
 
+  /* ── VIDEO SYNC ───────────────────────────────────────────────────────── */
+  useEffect(() => {
+    const vt = tracks.find(t => t.type === "video");
+    if (!vt) return;
 
+    const activeClip = vt.clips.find(c => playhead >= c.start && playhead < c.end);
 
-useEffect(() => {
-  const vt = tracks.find(t => t.type === "video");
-  if (!vt) return;
+    vt.clips.forEach(c => {
+      const el = videoEls.current[c.id];
+      if (el && !el.paused) el.pause();
+    });
 
-  const activeClip = vt.clips.find(
-    c => playhead >= c.start && playhead < c.end
-  );
+    if (!activeClip) return;
+    const el = videoEls.current[activeClip.id];
+    if (!el) return;
 
-  // pause all videos
-  vt.clips.forEach(c => {
-    const el = videoEls.current[c.id];
-    if (el && !el.paused) el.pause();
-  });
+    const mediaOffset = activeClip.mediaOffset || 0;
+    const localTime   = mediaOffset + (playhead - activeClip.start);
 
-  if (!activeClip) return;
-
-  const el = videoEls.current[activeClip.id];
-  if (!el) return;
-
-  const mediaOffset = activeClip.mediaOffset || 0;
-  const localTime = mediaOffset + (playhead - activeClip.start);
-
-  if (Math.abs(el.currentTime - localTime) > 0.3) {
-    el.currentTime = localTime;
-  }
-
-  if (isPlaying && el.paused) {
-    el.play().catch(() => {});
-  }
-  if (!isPlaying && !el.paused) {
-    el.pause();
-  }
-}, [playhead, isPlaying, tracks]);
+    if (Math.abs(el.currentTime - localTime) > 0.3) {
+      el.currentTime = localTime;
+    }
+    if (isPlaying && el.paused)  el.play().catch(() => {});
+    if (!isPlaying && !el.paused) el.pause();
+  }, [playhead, isPlaying, tracks]);
 
   /* ── FILE UPLOAD ──────────────────────────────────────────────────────── */
   const handleFileUpload = async (e) => {
     const files = e.target.files;
     if (!files.length) return;
     const fd = new FormData();
-    for (let i = 0; i < files.length; i++) fd.append("files", files[i]);
+    for (let i = 0; i < files.length; i++) {
+      if (files[i] instanceof File) fd.append("files", files[i]);
+    }
     setUploading(true);
     try {
       const res  = await fetch(`${API_URL}/api/upload`, { method: "POST", body: fd });
@@ -259,18 +257,11 @@ useEffect(() => {
     const track = tracks.find(t => t.type === trackType);
     const insertAt = startTime ?? (track?.clips.length ? Math.max(...track.clips.map(c => c.end)) : 0);
     const newClip = {
-  id: uid(),
-  name: file.name,
-  src: file.url,
-  type: file.type || "video/mp4",
-  start: Math.max(0, insertAt),
-  end: Math.max(0, insertAt) + duration,
-  duration,
-  mediaOffset: 0, 
-  muted: false,
-  volume: 1.0, // ✅ NEW
-};
-
+      id: uid(), name: file.name, src: file.url,
+      type: file.type || "video/mp4",
+      start: Math.max(0, insertAt), end: Math.max(0, insertAt) + duration,
+      duration, mediaOffset: 0, muted: false, volume: 1.0,
+    };
     setTracks(prev => prev.map(t =>
       t.type === trackType
         ? { ...t, clips: [...t.clips, newClip].sort((a, b) => a.start - b.start) }
@@ -288,8 +279,7 @@ useEffect(() => {
   /* ── TOGGLE MUTE ─────────────────────────────────────────────────────── */
   const toggleMuteClip = (clipId) => {
     setTracks(prev => prev.map(t => ({
-      ...t,
-      clips: t.clips.map(c => c.id === clipId ? { ...c, muted: !c.muted } : c)
+      ...t, clips: t.clips.map(c => c.id === clipId ? { ...c, muted: !c.muted } : c)
     })));
   };
 
@@ -301,50 +291,21 @@ useEffect(() => {
   }, []);
 
   /* ── SPLIT ────────────────────────────────────────────────────────────── */
-const splitAtPlayhead = () => {
-  const vt = tracks.find(t => t.type === "video");
-  if (!vt) return;
-
-  const clip = vt.clips.find(
-    c => playhead > c.start + 0.05 && playhead < c.end - 0.05
-  );
-
-  if (!clip) {
-    showNotif("Place playhead over a clip to split", "error");
-    return;
-  }
-
-  const splitOffset = playhead - clip.start;
-
-  const left = {
-    ...clip,
-    end: playhead
+  const splitAtPlayhead = () => {
+    const vt = tracks.find(t => t.type === "video");
+    if (!vt) return;
+    const clip = vt.clips.find(c => playhead > c.start + 0.05 && playhead < c.end - 0.05);
+    if (!clip) { showNotif("Place playhead over a clip to split", "error"); return; }
+    const splitOffset = playhead - clip.start;
+    const left  = { ...clip, end: playhead };
+    const right = { ...clip, id: uid(), start: playhead, mediaOffset: (clip.mediaOffset || 0) + splitOffset };
+    setTracks(prev => prev.map(t =>
+      t.id !== vt.id ? t : {
+        ...t, clips: [...t.clips.filter(c => c.id !== clip.id), left, right].sort((a, b) => a.start - b.start)
+      }
+    ));
+    showNotif("Clip split");
   };
-
-  const right = {
-    ...clip,
-    id: uid(),
-    start: playhead,
-    mediaOffset: (clip.mediaOffset || 0) + splitOffset
-  };
-
-  setTracks(prev =>
-    prev.map(t =>
-      t.id === vt.id
-        ? {
-            ...t,
-            clips: [
-              ...t.clips.filter(c => c.id !== clip.id),
-              left,
-              right
-            ].sort((a, b) => a.start - b.start)
-          }
-        : t
-    )
-  );
-
-  showNotif("Clip split");
-};
 
   /* ── RESIZE ───────────────────────────────────────────────────────────── */
   const startResize = (e, clip, edge, trackId) => {
@@ -393,7 +354,7 @@ const splitAtPlayhead = () => {
         if (t.id !== movingClip.trackId) return t;
         return { ...t, clips: t.clips.map(c =>
           c.id !== movingClip.clipId ? c : { ...c, start: ns, end: ns + dur }
-        ).sort((a,b) => a.start - b.start) };
+        ).sort((a, b) => a.start - b.start) };
       }));
     };
     const onUp = () => setMovingClip(null);
@@ -406,7 +367,7 @@ const splitAtPlayhead = () => {
   const startDragText = (e, clip) => {
     e.stopPropagation();
     if (!previewRef.current) return;
-    const rect   = previewRef.current.getBoundingClientRect();
+    const rect    = previewRef.current.getBoundingClientRect();
     const startPx = clip.textOverlay?.px ?? (POS_MAP[clip.textOverlay?.position || "center"]?.x ?? 50);
     const startPy = clip.textOverlay?.py ?? (POS_MAP[clip.textOverlay?.position || "center"]?.y ?? 50);
     setDraggingText({ clipId: clip.id, startX: e.clientX, startY: e.clientY, startPx, startPy, rect });
@@ -420,9 +381,7 @@ const splitAtPlayhead = () => {
       const py = Math.max(2, Math.min(98, draggingText.startPy + dy));
       const clip = tracks.flatMap(t => t.clips).find(c => c.id === draggingText.clipId);
       if (!clip) return;
-      updateClip(draggingText.clipId, {
-        textOverlay: { ...clip.textOverlay, px, py, position: "custom" }
-      });
+      updateClip(draggingText.clipId, { textOverlay: { ...clip.textOverlay, px, py, position: "custom" } });
     };
     const onUp = () => setDraggingText(null);
     window.addEventListener("mousemove", onMove);
@@ -440,7 +399,7 @@ const splitAtPlayhead = () => {
   const handleDrop = async (e, trackType) => {
     e.preventDefault();
     if (!draggingFile) return;
-    const rect    = e.currentTarget.getBoundingClientRect();
+    const rect     = e.currentTarget.getBoundingClientRect();
     const dropTime = Math.max(0, (e.clientX - rect.left) / pixelsPerSecond);
     await addClipToTimeline(draggingFile, dropTime, trackType);
     setDraggingFile(null);
@@ -448,35 +407,24 @@ const splitAtPlayhead = () => {
 
   /* ── ADD AUDIO FROM LIBRARY ───────────────────────────────────────────── */
   const addAudioFromLibrary = (audio) => {
-  const at = tracks.find(t => t.type === "audio");
-  const insertAt = at?.clips.length ? Math.max(...at.clips.map(c => c.end)) : 0;
-
-  const clip = {
-  id: uid(),
-  name: audio.name,
-  src: audio.url,
-  type: "audio/mpeg",
-  start: insertAt,
-  end: insertAt + audio.duration,
-  duration: audio.duration,
-  mediaOffset: 0, 
-  muted: false,
-  volume: 1.0
-};
-
-
-  setTracks(prev => prev.map(t =>
-    t.type === "audio"
-      ? { ...t, clips: [...t.clips, clip].sort((a,b) => a.start - b.start) }
-      : t
-  ));
-
-  // ✅ NEW — set preview audio source
-  setPreviewAudio(audio.url);
-
-  showNotif(`Added "${audio.name}" to Audio track`);
-};
-;
+    const at = tracks.find(t => t.type === "audio");
+    const insertAt = at?.clips.length ? Math.max(...at.clips.map(c => c.end)) : 0;
+    const clip = {
+      id: uid(), name: audio.name,
+      src: audio.url,        // full URL e.g. http://localhost:5000/audio/chill-lofi.mp3
+      type: "audio/mpeg",
+      start: insertAt, end: insertAt + audio.duration,
+      duration: audio.duration, mediaOffset: 0, muted: false, volume: 1.0,
+    };
+    setTracks(prev => prev.map(t =>
+      t.type === "audio"
+        ? { ...t, clips: [...t.clips, clip].sort((a, b) => a.start - b.start) }
+        : t
+    ));
+    // FIX: No setPreviewAudio needed — the audio useEffect above handles
+    // setting audioEl.src directly from tracks state whenever tracks changes.
+    showNotif(`Added "${audio.name}" to Audio track`);
+  };
 
   /* ── ADD / EDIT TEXT ──────────────────────────────────────────────────── */
   const submitTextClip = (e) => {
@@ -487,7 +435,6 @@ const splitAtPlayhead = () => {
     const fontColor = fd.get("fontColor") || "#ffffff";
     const position  = fd.get("position") || "center";
     const startPos  = POS_MAP[position] || POS_MAP["center"];
-
     if (editTextClip) {
       updateClip(editTextClip.id, {
         name: text.slice(0, 24) || "Text",
@@ -506,7 +453,7 @@ const splitAtPlayhead = () => {
         textOverlay: { enabled: true, text, fontSize, fontColor, position, px: startPos.x, py: startPos.y }
       };
       setTracks(prev => prev.map(t =>
-        t.type === "text" ? { ...t, clips: [...t.clips, clip].sort((a,b) => a.start - b.start) } : t
+        t.type === "text" ? { ...t, clips: [...t.clips, clip].sort((a, b) => a.start - b.start) } : t
       ));
       showNotif("Text overlay added");
     }
@@ -518,58 +465,42 @@ const splitAtPlayhead = () => {
   const handleExport = async () => {
     const vt = tracks.find(t => t.type === "video");
     if (!vt?.clips.length) { showNotif("Add video clips first", "error"); return; }
-
     setExporting(true);
     try {
       const cleanTracks = JSON.parse(JSON.stringify(tracks));
       console.log("📤 Exporting:", cleanTracks.map(t => `${t.type}:${t.clips.length}`).join(", "));
-
       const response = await fetch(`${API_URL}/api/export-video`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ tracks: cleanTracks, projectName: `project_${Date.now()}` }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tracks: cleanTracks, projectName: `project_${Date.now()}` }),
       });
-
       if (!response.ok) {
         let msg = `Server error ${response.status}`;
         try { const d = await response.json(); msg = d.error || msg; } catch {}
         throw new Error(msg);
       }
-
       const d = await response.json();
       const taskId = d?.taskId;
       if (!taskId) throw new Error(d?.error || "No task ID returned from server");
-
       showNotif("Export started — processing in background…");
-
-      // Poll until done
       let attempts = 0;
-      const maxAttempts = 120; // ~6 minutes (120 × 3 s)
+      const maxAttempts = 120;
       const interval = setInterval(async () => {
         attempts += 1;
         try {
-          const statusRes = await fetch(`${API_URL}/api/status/${taskId}`);
+          const statusRes  = await fetch(`${API_URL}/api/status/${taskId}`);
           if (!statusRes.ok) throw new Error(`Status check failed: ${statusRes.status}`);
           const statusData = await statusRes.json();
-
           if (statusData.status === "success") {
             clearInterval(interval);
             setExporting(false);
-
-            // Build absolute download URL
             const downloadUrl = statusData.outputUrl.startsWith("http")
-              ? statusData.outputUrl
-              : `${API_URL}${statusData.outputUrl}`;
-
-            // ✅ Use <a download> so browser saves the file instead of opening it
+              ? statusData.outputUrl : `${API_URL}${statusData.outputUrl}`;
             const a = document.createElement("a");
             a.href = downloadUrl;
-            // Derive a clean filename from the URL
             a.download = downloadUrl.split("/").pop() || "export.mp4";
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-
             showNotif("✅ Export complete — downloading!");
           } else if (statusData.status === "failed") {
             clearInterval(interval);
@@ -585,7 +516,6 @@ const splitAtPlayhead = () => {
           clearInterval(interval);
           setExporting(false);
           showNotif(`Export failed: ${err.message}`, "error");
-          console.error("Export polling error:", err);
         }
       }, 3000);
     } catch (err) {
@@ -605,6 +535,13 @@ const splitAtPlayhead = () => {
   return (
     <>
       <style>{CSS}</style>
+
+      {/*
+        FIX: <audio> is ALWAYS in the DOM, never conditional.
+        audioRef.current is therefore always valid when useEffect runs.
+        We manage src via audioEl.src = ... inside the useEffect above.
+      */}
+      <audio ref={audioRef} preload="auto" style={{ display: "none" }} />
 
       <div className="shell">
 
@@ -673,44 +610,39 @@ const splitAtPlayhead = () => {
                 <p style={{fontSize:10,color:"var(--t3)",marginBottom:10,lineHeight:1.5}}>
                   Click ▶ to preview · Click track name to add to timeline
                 </p>
-                {/* Hidden audio element for preview */}
                 <audio ref={audioPreviewRef} style={{display:"none"}} onEnded={() => setPreviewingAudio(null)} />
-
                 {AUDIO_LIBRARY.map(a => {
-                  const isPlaying = previewingAudio === a.id;
+                  const isPreviewing = previewingAudio === a.id;
                   return (
                     <div key={a.id} className="aitem-v2" style={{"--acolor": a.color}}>
-                      {/* Play/pause preview button */}
                       <button
                         className="audio-play-btn"
                         style={{background: a.color}}
                         onClick={() => {
                           const el = audioPreviewRef.current;
                           if (!el) return;
-                          if (isPlaying) {
+                          if (isPreviewing) {
                             el.pause();
                             setPreviewingAudio(null);
                           } else {
                             el.src = a.url;
-                            el.play().catch(() => showNotif("Audio file not found — see setup instructions", "error"));
+                            el.play().catch(() => showNotif("Audio file not found — add mp3s to server/public/audio/", "error"));
                             setPreviewingAudio(a.id);
                           }
                         }}
                       >
-                        {isPlaying
+                        {isPreviewing
                           ? <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
                           : <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg>
                         }
                       </button>
-                      {/* Track info — click to add */}
                       <div className="audio-info" onClick={() => addAudioFromLibrary(a)} title="Click to add to timeline">
                         <div className="aname">{a.name}</div>
                         <div className="ameta">{a.category} · {Math.floor(a.duration/60)}:{String(a.duration%60).padStart(2,"0")}</div>
-                        {isPlaying && <div className="audio-playing-bar">
+                        {isPreviewing && <div className="audio-playing-bar">
                           {[...Array(16)].map((_,i) => <div key={i} className="audio-bar" style={{animationDelay:`${i*0.07}s`}} />)}
                         </div>}
                       </div>
-                      {/* Add button */}
                       <button className="madd" onClick={() => addAudioFromLibrary(a)} title="Add to Audio track">+</button>
                     </div>
                   );
@@ -744,10 +676,7 @@ const splitAtPlayhead = () => {
           {/* PREVIEW */}
           <main className="preview-center">
             <div className="preview-wrap">
-
-              {/* ── VIDEO CANVAS ── */}
               <div className="preview-canvas" ref={previewRef}>
-
                 {currentVideoClip ? (
                   currentVideoClip.type?.includes("image") ? (
                     <img src={currentVideoClip.src} alt={currentVideoClip.name}
@@ -759,7 +688,6 @@ const splitAtPlayhead = () => {
                       src={currentVideoClip.src}
                       style={{width:"100%",height:"100%",objectFit:"contain",display:"block"}}
                       playsInline muted={!!currentVideoClip.muted}
-                      volume={currentVideoClip.volume ?? 1}
                     />
                   )
                 ) : (
@@ -771,7 +699,6 @@ const splitAtPlayhead = () => {
                   </div>
                 )}
 
-                {/* Draggable text overlays */}
                 {activeTextClips.map(tc => {
                   const ov = tc.textOverlay;
                   if (!ov?.text) return null;
@@ -789,7 +716,6 @@ const splitAtPlayhead = () => {
                   );
                 })}
 
-                {/* ── BIG PLAY/PAUSE BUTTON overlaid on canvas ── */}
                 <div className="canvas-controls">
                   <button className="canvas-skip" onClick={() => { setPlayhead(0); setIsPlaying(false); }} title="Restart">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
@@ -805,7 +731,6 @@ const splitAtPlayhead = () => {
                   </button>
                 </div>
 
-                {/* Progress bar at bottom of canvas */}
                 <div className="canvas-progress-bg" onClick={e => {
                   const r = e.currentTarget.getBoundingClientRect();
                   setPlayhead((e.clientX - r.left) / r.width * totalDuration);
@@ -813,20 +738,9 @@ const splitAtPlayhead = () => {
                   <div className="canvas-progress-fill" style={{width:`${(playhead/totalDuration)*100}%`}} />
                 </div>
 
-                {/* Timecode */}
                 <div className="preview-tc">{fmt(playhead)}</div>
-
-                {previewAudio && (
-  <audio
-    ref={audioRef}
-    src={previewAudio}
-    preload="auto"
-  />
-)}
-
               </div>
 
-              {/* ── BOTTOM BAR: scrubber + full-preview button ── */}
               <div className="preview-bar">
                 <span className="preview-bar-time">{fmt(playhead)}</span>
                 <input type="range" className="preview-scrubber"
@@ -851,10 +765,8 @@ const splitAtPlayhead = () => {
                 <>
                   <div className="prop-label">Name</div>
                   <div className="prop-val">{selectedClipData.name}</div>
-
                   <div className="prop-label">Type</div>
                   <div className="prop-val">{selectedClipData.type}</div>
-
                   <div className="prop-label">Timing</div>
                   <div className="prop-row">
                     <div className="prop-col">
@@ -874,13 +786,11 @@ const splitAtPlayhead = () => {
                         value={+selectedClipData.end.toFixed(2)}
                         onChange={e => {
                           const ne = parseFloat(e.target.value) || 0;
-                          if (ne > selectedClipData.start)
-                            updateClip(selectedClipData.id, { end: ne });
+                          if (ne > selectedClipData.start) updateClip(selectedClipData.id, { end: ne });
                         }}
                       />
                     </div>
                   </div>
-
                   <div className="prop-label">Duration</div>
                   <div className="prop-val">{(selectedClipData.end - selectedClipData.start).toFixed(2)}s</div>
 
@@ -920,7 +830,6 @@ const splitAtPlayhead = () => {
                     </button>
                   </>}
 
-                  {/* Mute toggle — only for video clips with audio */}
                   {selectedClipData.type?.includes('video') && (
                     <button
                       className={`mute-btn${selectedClipData.muted ? " muted" : ""}`}
@@ -929,66 +838,41 @@ const splitAtPlayhead = () => {
                       {selectedClipData.muted ? <><IcMute /> Unmute Original Audio</> : <><IcVolume /> Mute Original Audio</>}
                     </button>
                   )}
+
                   {!selectedClipData.muted && (
-  <>
-    <div className="prop-label">Volume</div>
-    <input
-      type="range"
-      min="0"
-      max="1"
-      step="0.05"
-      value={selectedClipData.volume ?? 1}
-      onChange={e =>
-        updateClip(selectedClipData.id, {
-          volume: parseFloat(e.target.value)
-        })
-      }
-    />
-  </>
-)}
+                    <>
+                      <div className="prop-label">Volume</div>
+                      <input type="range" min="0" max="1" step="0.05"
+                        value={selectedClipData.volume ?? 1}
+                        onChange={e => updateClip(selectedClipData.id, { volume: parseFloat(e.target.value) })}
+                      />
+                    </>
+                  )}
 
                   <button className="del-btn" onClick={() => removeClip(selectedClipData.id)}>
                     <IcTrash /> Remove Clip
                   </button>
 
-                  {/* 🔊 Background Audio Controls */}
-{selectedClipData.type === "audio/mpeg" && (
-  <>
-    <div className="prop-label">Background Audio</div>
-
-    <button
-      className={`mute-btn${selectedClipData.muted ? " muted" : ""}`}
-      onClick={() =>
-        updateClip(selectedClipData.id, {
-          muted: !selectedClipData.muted
-        })
-      }
-    >
-      {selectedClipData.muted
-        ? <><IcMute /> Unmute Music</>
-        : <><IcVolume /> Mute Music</>}
-    </button>
-
-    {!selectedClipData.muted && (
-      <>
-        <div className="prop-label">Music Volume</div>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.05"
-          value={selectedClipData.volume ?? 1}
-          onChange={e =>
-            updateClip(selectedClipData.id, {
-              volume: parseFloat(e.target.value)
-            })
-          }
-        />
-      </>
-    )}
-  </>
-)}
-
+                  {selectedClipData.type === "audio/mpeg" && (
+                    <>
+                      <div className="prop-label">Background Audio</div>
+                      <button
+                        className={`mute-btn${selectedClipData.muted ? " muted" : ""}`}
+                        onClick={() => updateClip(selectedClipData.id, { muted: !selectedClipData.muted })}
+                      >
+                        {selectedClipData.muted ? <><IcMute /> Unmute Music</> : <><IcVolume /> Mute Music</>}
+                      </button>
+                      {!selectedClipData.muted && (
+                        <>
+                          <div className="prop-label">Music Volume</div>
+                          <input type="range" min="0" max="1" step="0.05"
+                            value={selectedClipData.volume ?? 1}
+                            onChange={e => updateClip(selectedClipData.id, { volume: parseFloat(e.target.value) })}
+                          />
+                        </>
+                      )}
+                    </>
+                  )}
                 </>
               ) : (
                 <div className="no-sel">
@@ -1010,11 +894,8 @@ const splitAtPlayhead = () => {
               <button className="zoom-btn" onClick={() => setZoom(z => Math.min(5, z+0.25))}><IcZoomIn /></button>
             </div>
           </div>
-
           <div className="tl-scroll" ref={timelineRef}>
             <div className="tl-inner" style={{width: Math.max(timelineWidth + 100, 800)}}>
-
-              {/* RULER */}
               <div className="ruler-row">
                 <div className="track-lbl-spacer" />
                 <div className="ruler-ticks" style={{width: timelineWidth}} onClick={handleRulerClick}>
@@ -1026,8 +907,6 @@ const splitAtPlayhead = () => {
                   ))}
                 </div>
               </div>
-
-              {/* TRACKS */}
               {tracks.map(track => {
                 const color = track.type === "video" ? "#3b82f6" : track.type === "audio" ? "#10b981" : "#f59e0b";
                 return (
@@ -1067,11 +946,7 @@ const splitAtPlayhead = () => {
                                 <img src={clip.src} alt="" className="clip-thumb" />
                               )}
                               <span className="clip-nm">{clip.name}</span>
-                              {clip.muted && (
-                                <span className="clip-mute-badge" title="Audio muted">
-                                  <IcMute />
-                                </span>
-                              )}
+                              {clip.muted && <span className="clip-mute-badge" title="Audio muted"><IcMute /></span>}
                             </div>
                             <div className="rh rh-r" onMouseDown={e => { e.stopPropagation(); startResize(e, clip, "right", track.id); }} />
                           </div>
@@ -1086,15 +961,14 @@ const splitAtPlayhead = () => {
         </section>
       </div>
 
-      {/* ══ FULL PREVIEW MODAL ════════════════════════════════════════════════ */}
+      {/* FULL PREVIEW MODAL */}
       {fullPreview && (
         <div className="fp-overlay" onClick={() => { setIsPlaying(false); setFullPreview(false); }}>
           <div className="fp-box" onClick={e => e.stopPropagation()}>
-            {/* Header */}
             <div className="fp-header">
               <span className="fp-title">Preview — {fmt(playhead)} / {fmt(totalDuration)}</span>
               <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <button className="fp-ctrl" onClick={() => { setPlayhead(0); setIsPlaying(false); }} title="Restart">
+                <button className="fp-ctrl" onClick={() => { setPlayhead(0); setIsPlaying(false); }}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
                 </button>
                 <button className="fp-play" onClick={() => setIsPlaying(p => !p)}>
@@ -1108,8 +982,6 @@ const splitAtPlayhead = () => {
                 </button>
               </div>
             </div>
-
-            {/* Video canvas */}
             <div className="fp-canvas">
               {currentVideoClip ? (
                 currentVideoClip.type?.includes("image") ? (
@@ -1120,8 +992,7 @@ const splitAtPlayhead = () => {
                     ref={el => { if (el) { videoEls.current["fp-" + currentVideoClip.id] = el; fullVideoRef.current = el; } }}
                     src={currentVideoClip.src}
                     style={{width:"100%",height:"100%",objectFit:"contain"}}
-                    playsInline
-                    muted={currentVideoClip.muted}
+                    playsInline muted={currentVideoClip.muted}
                   />
                 )
               ) : (
@@ -1130,8 +1001,6 @@ const splitAtPlayhead = () => {
                   <p>No video at this position</p>
                 </div>
               )}
-
-              {/* Text overlays */}
               {activeTextClips.map(tc => {
                 const ov = tc.textOverlay;
                 if (!ov?.text) return null;
@@ -1140,37 +1009,25 @@ const splitAtPlayhead = () => {
                 return (
                   <div key={tc.id} style={{
                     position:"absolute", left:`${px}%`, top:`${py}%`,
-                    transform:"translate(-50%,-50%)",
-                    fontSize: (ov.fontSize || 32) * 1.4,
-                    color: ov.fontColor || "#fff",
-                    fontWeight:700,
+                    transform:"translate(-50%,-50%)", fontSize: (ov.fontSize || 32) * 1.4,
+                    color: ov.fontColor || "#fff", fontWeight:700,
                     textShadow:"0 2px 12px rgba(0,0,0,1), 0 0 30px rgba(0,0,0,.8)",
-                    pointerEvents:"none",
-                    padding:"4px 12px",
-                    background:"rgba(0,0,0,.4)",
-                    borderRadius:4,
-                    whiteSpace:"nowrap"
+                    pointerEvents:"none", padding:"4px 12px",
+                    background:"rgba(0,0,0,.4)", borderRadius:4, whiteSpace:"nowrap"
                   }}>
                     {ov.text}
                   </div>
                 );
               })}
-
-              {/* Progress bar */}
               <div style={{position:"absolute",bottom:0,left:0,right:0,height:3,background:"rgba(255,255,255,.1)"}}>
                 <div style={{height:"100%",background:"var(--acc)",width:`${(playhead/totalDuration)*100}%`,transition:"width .1s linear"}} />
               </div>
-
-              {/* Timecode */}
               <div style={{position:"absolute",top:10,right:12,background:"rgba(0,0,0,.8)",padding:"3px 10px",borderRadius:5,fontSize:12,fontFamily:"'DM Mono',monospace",color:"#fff"}}>
                 {fmt(playhead)}
               </div>
             </div>
-
-            {/* Scrubber */}
             <div style={{padding:"8px 16px 12px"}}>
-              <input type="range" min={0} max={totalDuration} step={0.05}
-                value={playhead}
+              <input type="range" min={0} max={totalDuration} step={0.05} value={playhead}
                 onChange={e => { setIsPlaying(false); setPlayhead(parseFloat(e.target.value)); }}
                 style={{width:"100%",accentColor:"var(--acc)",cursor:"pointer"}}
               />
@@ -1219,9 +1076,7 @@ const splitAtPlayhead = () => {
   );
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   ALL CSS INLINED
-──────────────────────────────────────────────────────────────────────────── */
+/* ─── CSS ─────────────────────────────────────────────────────────────────── */
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
 
@@ -1235,10 +1090,8 @@ const CSS = `
   --sw:240px;--th:52px;--tlh:200px;
 }
 body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overflow:hidden;height:100vh;}
-
 .shell{display:grid;grid-template-rows:var(--th) 1fr var(--tlh);height:100vh;}
 .main{display:grid;grid-template-columns:var(--sw) 1fr 268px;overflow:hidden;}
-
 .topbar{display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--s1);border-bottom:1px solid var(--b1);z-index:10;}
 .logo{font-weight:600;font-size:15px;letter-spacing:-.3px;display:flex;align-items:center;gap:6px;margin-right:6px;}
 .logo span{color:var(--acc);}
@@ -1250,7 +1103,6 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 .export-btn:hover{background:var(--acc2);}
 .export-btn:disabled{opacity:.5;cursor:not-allowed;}
 .timecode{font-family:'DM Mono',monospace;font-size:12px;color:var(--t2);padding:4px 10px;background:var(--bg);border-radius:6px;border:1px solid var(--b1);}
-
 .sidebar{background:var(--s1);border-right:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden;}
 .stabs{display:flex;border-bottom:1px solid var(--b1);}
 .stab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:9px 4px;font-size:9px;color:var(--t3);cursor:pointer;border:none;background:none;transition:all .15s;border-bottom:2px solid transparent;font-family:inherit;}
@@ -1260,14 +1112,12 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 .scontent{flex:1;overflow-y:auto;padding:12px;scrollbar-width:thin;scrollbar-color:var(--b1) transparent;}
 .scontent::-webkit-scrollbar{width:3px;}
 .scontent::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px;}
-
 .upload-zone{border:1.5px dashed var(--b2);border-radius:10px;padding:18px 12px;text-align:center;cursor:pointer;transition:all .2s;margin-bottom:12px;}
 .upload-zone:hover{border-color:var(--acc);background:rgba(55,229,132,.04);}
 .uicon{width:32px;height:32px;background:var(--s3);border-radius:8px;display:flex;align-items:center;justify-content:center;margin:0 auto 8px;color:var(--t2);}
 .utext{font-size:12px;font-weight:500;color:var(--t2);}
 .usub{font-size:10px;color:var(--t3);margin-top:2px;}
 .sec-label{font-size:9px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--b1);}
-
 .mitem{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:8px;background:var(--s2);margin-bottom:5px;cursor:grab;border:1px solid transparent;transition:all .15s;}
 .mitem:hover{border-color:var(--b2);background:var(--s3);}
 .mthumb{width:40px;height:28px;border-radius:5px;background:var(--s3);overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center;}
@@ -1277,13 +1127,6 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 .mmeta{font-size:9px;color:var(--t3);margin-top:1px;}
 .madd{padding:3px 8px;border-radius:5px;border:1px solid var(--b2);background:transparent;color:var(--t2);font-size:11px;cursor:pointer;flex-shrink:0;transition:all .15s;display:flex;align-items:center;gap:2px;}
 .madd:hover{background:var(--acc);color:#0a1f12;border-color:var(--acc);}
-
-.aitem{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:8px;background:var(--s2);margin-bottom:5px;cursor:pointer;border:1px solid transparent;transition:all .15s;}
-.aitem:hover{border-color:var(--green);background:rgba(16,185,129,.05);}
-.aname{font-size:12px;font-weight:500;}
-.ameta{font-size:9px;color:var(--t3);margin-top:1px;}
-.adur{font-size:10px;color:var(--t3);font-family:'DM Mono',monospace;flex-shrink:0;}
-
 .aitem-v2{display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:9px;background:var(--s2);margin-bottom:7px;border:1px solid transparent;transition:all .15s;}
 .aitem-v2:hover{border-color:var(--acolor, var(--b2));background:var(--s3);}
 .audio-play-btn{width:28px;height:28px;border-radius:50%;border:none;color:#fff;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:transform .15s,filter .15s;}
@@ -1296,47 +1139,32 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 @keyframes audioBounce{from{transform:scaleY(.4);}to{transform:scaleY(1);}}
 .text-add-btn{width:100%;padding:10px;border-radius:9px;border:1.5px solid var(--orange);background:rgba(245,158,11,.07);color:var(--orange);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:all .15s;}
 .text-add-btn:hover{background:rgba(245,158,11,.15);}
-
 .preview-center{background:#0a0a0a;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:12px 16px;overflow:hidden;gap:0;}
 .preview-wrap{width:100%;max-width:720px;display:flex;flex-direction:column;gap:8px;min-height:0;flex:1;}
 .preview-canvas{aspect-ratio:16/9;background:#000;border-radius:8px;border:1px solid var(--b1);position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;user-select:none;}
 .preview-empty{text-align:center;color:var(--t3);display:flex;flex-direction:column;align-items:center;}
 .preview-empty p{font-size:11px;margin-top:4px;}
 .preview-tc{position:absolute;top:8px;right:10px;background:rgba(0,0,0,.7);padding:3px 8px;border-radius:5px;font-size:10px;font-family:'DM Mono',monospace;color:#fff;pointer-events:none;z-index:5;}
-
 .preview-text{position:absolute;transform:translate(-50%,-50%);cursor:move;font-weight:700;text-shadow:0 2px 8px rgba(0,0,0,.9),0 0 24px rgba(0,0,0,.6);white-space:nowrap;padding:4px 10px;border-radius:4px;border:1.5px solid transparent;transition:border-color .15s;z-index:10;}
 .preview-text:hover{border-color:rgba(255,255,255,.5);background:rgba(0,0,0,.35);}
 .preview-text.sel-text{border-color:var(--acc) !important;background:rgba(55,229,132,.12);}
 .text-move-hint{position:absolute;bottom:-22px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.8);border-radius:3px;padding:2px 5px;opacity:0;transition:opacity .15s;font-size:9px;color:var(--t2);pointer-events:none;display:flex;align-items:center;gap:3px;white-space:nowrap;}
 .preview-text:hover .text-move-hint{opacity:1;}
-
-.play-controls{display:flex;align-items:center;justify-content:center;gap:10px;}
-.ctrl-btn{width:32px;height:32px;border-radius:50%;border:1px solid var(--b2);background:var(--s2);color:var(--t2);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;}
-.ctrl-btn:hover{background:var(--s3);color:var(--t1);}
-.ctrl-btn.primary{background:var(--acc);color:#0a1f12;border-color:var(--acc);}
-.ctrl-btn.primary:hover{background:var(--acc2);}
-
-/* CANVAS OVERLAID CONTROLS */
 .canvas-controls{position:absolute;bottom:36px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;z-index:15;opacity:0;transition:opacity .2s;}
 .preview-canvas:hover .canvas-controls{opacity:1;}
 .canvas-play{width:52px;height:52px;border-radius:50%;background:var(--acc);border:none;color:#0a1f12;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .15s,filter .15s;box-shadow:0 4px 20px rgba(0,0,0,.6);}
 .canvas-play:hover{transform:scale(1.1);filter:brightness(1.1);}
 .canvas-skip{width:34px;height:34px;border-radius:50%;background:rgba(0,0,0,.65);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;backdrop-filter:blur(4px);}
 .canvas-skip:hover{background:rgba(0,0,0,.85);border-color:rgba(255,255,255,.5);}
-
-/* PROGRESS BAR ON CANVAS */
 .canvas-progress-bg{position:absolute;bottom:0;left:0;right:0;height:4px;background:rgba(255,255,255,.15);cursor:pointer;z-index:16;}
 .canvas-progress-bg:hover{height:6px;}
 .canvas-progress-fill{height:100%;background:var(--acc);border-radius:0 2px 2px 0;pointer-events:none;transition:width .1s linear;}
-
-/* BOTTOM SCRUBBER BAR */
 .preview-bar{display:flex;align-items:center;gap:8px;padding:4px 2px;}
 .preview-bar-time{font-size:10px;font-family:'DM Mono',monospace;color:var(--t3);flex-shrink:0;min-width:40px;}
 .preview-bar-time:last-of-type{text-align:right;}
 .preview-scrubber{flex:1;height:4px;accent-color:var(--acc);cursor:pointer;border-radius:2px;}
 .preview-fullbtn{display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:6px;border:1px solid var(--acc);background:rgba(55,229,132,.08);color:var(--acc);font-size:11px;cursor:pointer;transition:all .15s;font-family:inherit;white-space:nowrap;flex-shrink:0;}
 .preview-fullbtn:hover{background:rgba(55,229,132,.18);}
-
 .right-panel{background:var(--s1);border-left:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden;}
 .panel-hdr{padding:11px 13px;border-bottom:1px solid var(--b1);font-size:10px;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.8px;}
 .panel-body{flex:1;overflow-y:auto;padding:12px;scrollbar-width:thin;scrollbar-color:var(--b1) transparent;}
@@ -1351,7 +1179,6 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 .prop-col{flex:1;}
 .del-btn{width:100%;margin-top:14px;padding:7px;border-radius:7px;border:1px solid var(--red);background:rgba(239,68,68,.08);color:var(--red);font-size:11px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:5px;font-family:inherit;}
 .del-btn:hover{background:rgba(239,68,68,.2);}
-
 .tl-section{background:var(--s1);border-top:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden;}
 .tl-toolbar{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--b1);}
 .tl-btn{display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:6px;border:1px solid var(--b1);background:var(--s2);color:var(--t2);font-size:11px;font-family:inherit;cursor:pointer;transition:all .15s;}
@@ -1359,27 +1186,22 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 .zoom-btn{width:26px;height:26px;border-radius:6px;border:1px solid var(--b1);background:var(--s2);color:var(--t2);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;}
 .zoom-btn:hover{background:var(--s3);color:var(--t1);}
 .zoom-lbl{font-size:10px;color:var(--t3);font-family:'DM Mono',monospace;min-width:34px;text-align:center;}
-
 .tl-scroll{flex:1;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scrollbar-color:var(--b1) transparent;}
 .tl-scroll::-webkit-scrollbar{height:4px;}
 .tl-scroll::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px;}
 .tl-inner{position:relative;}
-
 .ruler-row{display:flex;height:22px;border-bottom:1px solid var(--b1);background:var(--bg);position:sticky;top:0;z-index:4;}
 .track-lbl-spacer{width:68px;flex-shrink:0;border-right:1px solid var(--b1);}
 .ruler-ticks{flex:1;position:relative;cursor:pointer;overflow:hidden;}
 .r-tick{position:absolute;top:0;display:flex;flex-direction:column;align-items:flex-start;}
 .r-tick-line{width:1px;height:7px;background:var(--b2);}
 .r-tick-lbl{font-size:8px;color:var(--t3);font-family:'DM Mono',monospace;margin-top:2px;margin-left:2px;white-space:nowrap;}
-
 .track-row{display:flex;height:50px;border-bottom:1px solid var(--b1);}
 .track-lbl{width:68px;flex-shrink:0;display:flex;align-items:center;padding:0 8px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;border-right:1px solid var(--b1);position:sticky;left:0;z-index:3;background:var(--s1);}
 .track-content{flex:1;position:relative;background:rgba(255,255,255,.015);}
 .empty-track{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--t3);pointer-events:none;}
-
 .ph-line{position:absolute;top:0;bottom:0;width:2px;background:var(--acc);z-index:20;pointer-events:none;transform:translateX(-1px);}
 .ph-head{position:absolute;top:-1px;left:50%;transform:translateX(-50%);width:9px;height:9px;background:var(--acc);clip-path:polygon(50% 100%,0 0,100% 0);}
-
 .tl-clip{position:absolute;top:4px;height:42px;border-radius:6px;display:flex;align-items:stretch;cursor:grab;user-select:none;border:1.5px solid rgba(255,255,255,.1);transition:border-color .1s,box-shadow .1s;overflow:hidden;}
 .tl-clip:active{cursor:grabbing;}
 .tl-clip.sel{border-color:#fff !important;box-shadow:0 0 0 1px rgba(255,255,255,.25);}
@@ -1387,11 +1209,9 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 .clip-nm{font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff;}
 .clip-thumb{width:32px;height:28px;border-radius:3px;object-fit:cover;flex-shrink:0;opacity:.85;}
 .waveform{flex:1;height:18px;background:repeating-linear-gradient(90deg,rgba(255,255,255,.7) 0,rgba(255,255,255,.7) 1px,transparent 1px,transparent 3px);border-radius:2px;opacity:.25;}
-
 .rh{width:7px;flex-shrink:0;background:rgba(255,255,255,.12);cursor:ew-resize;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .15s;}
 .tl-clip:hover .rh{opacity:1;}
 .rh::after{content:'';width:2px;height:12px;background:rgba(255,255,255,.5);border-radius:1px;}
-
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:200;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);}
 .modal-box{background:var(--s1);border:1px solid var(--b2);border-radius:14px;padding:24px;width:370px;box-shadow:0 24px 60px rgba(0,0,0,.6);}
 .modal-title{font-size:16px;font-weight:600;margin-bottom:18px;}
@@ -1404,23 +1224,15 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 .modal-cancel:hover{background:var(--s3);color:var(--t1);}
 .modal-submit{flex:1;padding:9px;border-radius:8px;border:none;background:var(--acc);color:#0a1f12;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;transition:all .15s;}
 .modal-submit:hover{background:var(--acc2);}
-
 .notif{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:10px 20px;border-radius:99px;font-size:12px;font-weight:600;z-index:999;pointer-events:none;animation:nfIn .2s ease;}
 .notif.success{background:var(--acc);color:#0a1f12;}
 .notif.error{background:var(--red);color:#fff;}
 @keyframes nfIn{from{opacity:0;transform:translateX(-50%) translateY(8px);}to{opacity:1;transform:translateX(-50%) translateY(0);}}
-
 select.modal-inp{appearance:none;}
-
-/* MUTE BUTTON in properties */
 .mute-btn{width:100%;margin-top:8px;padding:7px;border-radius:7px;border:1px solid var(--b2);background:var(--s2);color:var(--t2);font-size:11px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:5px;font-family:inherit;}
 .mute-btn:hover{border-color:var(--orange);color:var(--orange);background:rgba(245,158,11,.08);}
 .mute-btn.muted{border-color:var(--orange);color:var(--orange);background:rgba(245,158,11,.12);}
-
-/* MUTE BADGE on timeline clip */
 .clip-mute-badge{display:flex;align-items:center;background:rgba(0,0,0,.5);border-radius:3px;padding:1px 3px;flex-shrink:0;color:var(--orange);}
-
-/* FULL PREVIEW OVERLAY */
 .fp-overlay{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:300;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);}
 .fp-box{background:var(--bg);border:1px solid var(--b2);border-radius:14px;overflow:hidden;width:min(1100px,96vw);box-shadow:0 40px 100px rgba(0,0,0,.8);display:flex;flex-direction:column;}
 .fp-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--b1);background:var(--s1);}
