@@ -20,7 +20,6 @@ const BASE_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
 const videoProcessor = new VideoProcessor();
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
-import cors from "cors";
 
 const allowedOrigins = [
   "http://localhost:5173",
