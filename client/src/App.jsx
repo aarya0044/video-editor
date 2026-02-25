@@ -1,13 +1,9 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 
 /* ─── API URL ─────────────────────────────────────────────────────────────── */
-const API_URL = (() => {
-  try {
-    if (window.location.hostname.includes("netlify.app"))
-      return "https://video-editor-backend-0hda.onrender.com";
-    return import.meta.env?.VITE_API_URL || "http://localhost:5000";
-  } catch { return "http://localhost:5000"; }
-})();
+const API_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  "http://localhost:5000";
 
 /* ─── AUDIO LIBRARY ───────────────────────────────────────────────────────── */
 // Place mp3 files in backend/public/audio/ and serve with:
