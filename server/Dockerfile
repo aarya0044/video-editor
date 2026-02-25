@@ -1,4 +1,3 @@
-# ── Backend Dockerfile ────────────────────────────────────────────────────────
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -15,18 +14,20 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Verify subtitles filter is available (uses libass, always present on Ubuntu 22.04)
+# Verify subtitles filter
 RUN ffmpeg -filters 2>&1 | grep subtitles && echo "subtitles filter OK"
 
-WORKDIR /app
+# ⬇⬇⬇ IMPORTANT CHANGE
+WORKDIR /app/server
 
-COPY package*.json ./
+# Copy ONLY server package files
+COPY server/package*.json ./
 RUN npm install
 
-COPY . .
+# Copy server code
+COPY server/ .
 
 RUN mkdir -p uploads outputs temp public/audio
 
 EXPOSE 5000
-
 CMD ["node", "index.js"]
