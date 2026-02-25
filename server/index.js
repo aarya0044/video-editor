@@ -22,20 +22,28 @@ const BASE_URL = isProduction
 const videoProcessor = new VideoProcessor();
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
+import cors from "cors";
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "https://video-editor-ten-lyart.vercel.app"
+];
+
 app.use(cors({
   origin: (origin, callback) => {
+    // allow server-to-server & curl requests
     if (!origin) return callback(null, true);
-    if (origin.endsWith('.netlify.app') || origin.includes('localhost')) {
+
+    if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
-    console.log('❌ Blocked by CORS:', origin);
-    callback(new Error('Not allowed by CORS'));
+
+    console.error("❌ Blocked by CORS:", origin);
+    return callback(new Error("Not allowed by CORS"));
   },
   credentials: true
 }));
-
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ── MULTER ────────────────────────────────────────────────────────────────────
 const storage = multer.diskStorage({
