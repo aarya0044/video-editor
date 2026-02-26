@@ -15,15 +15,13 @@ const app = express();
 
 const PORT = process.env.PORT || 5000;
 const isProduction = process.env.NODE_ENV === 'production';
-
-const BASE_URL =
-  process.env.PUBLIC_BASE_URL ||
-  `http://localhost:${PORT}`;
+const BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
 
 const videoProcessor = new VideoProcessor();
 
-// ── EXPORT LOCK — prevents multiple simultaneous FFmpeg jobs ──────────────────
+// ── EXPORT LOCK ───────────────────────────────────────────────────────────────
 let exportInProgress = false;
+let currentTaskId    = null;
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 const allowedOrigins = [
@@ -41,7 +39,6 @@ app.use(cors({
   },
   credentials: true
 }));
-
 app.options("*", cors());
 
 // ── MULTER ────────────────────────────────────────────────────────────────────
@@ -52,9 +49,9 @@ const storage = multer.diskStorage({
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    const timestamp = Date.now();
+    const timestamp    = Date.now();
     const originalName = path.parse(file.originalname).name;
-    const extension = path.extname(file.originalname);
+    const extension    = path.extname(file.originalname);
     cb(null, `${originalName}-${timestamp}${extension}`);
   }
 });
@@ -74,16 +71,16 @@ const upload = multer({
 app.post('/api/upload', upload.array('files'), (req, res) => {
   try {
     console.log('📁 Files received:', req.files?.length || 0);
-    if (!req.files || req.files.length === 0) {
+    if (!req.files || req.files.length === 0)
       return res.status(400).json({ success: false, error: 'No files uploaded' });
-    }
+
     const files = req.files.map(file => ({
-      id: Date.now() + Math.random(),
+      id:   Date.now() + Math.random(),
       name: file.originalname,
       path: `/uploads/${file.filename}`,
       type: file.mimetype,
       size: file.size,
-      url: `${BASE_URL}/uploads/${file.filename}`
+      url:  `${BASE_URL}/uploads/${file.filename}`
     }));
     console.log('✅ Files processed:', files.map(f => f.url));
     res.json({ success: true, message: `Uploaded ${files.length} file(s)!`, files });
@@ -98,18 +95,19 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'healthy',
     exportInProgress,
-    timestamp: new Date().toISOString(),
+    currentTaskId,
+    timestamp:   new Date().toISOString(),
     environment: isProduction ? 'production' : 'development',
-    baseUrl: BASE_URL
+    baseUrl:     BASE_URL
   });
 });
 
 app.get('/api/test', (req, res) => {
   res.json({
-    message: '✅ EditFlow Server is running!',
-    time: new Date().toLocaleString(),
+    message:     '✅ EditFlow Server is running!',
+    time:        new Date().toLocaleString(),
     environment: isProduction ? 'production' : 'development',
-    baseUrl: BASE_URL
+    baseUrl:     BASE_URL
   });
 });
 
@@ -118,8 +116,8 @@ app.get('/api/list-files', (req, res) => {
   try {
     const uploadsDir = path.join(__dirname, 'uploads');
     const outputsDir = path.join(__dirname, 'outputs');
-    const uploads = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
-    const outputs = fs.existsSync(outputsDir) ? fs.readdirSync(outputsDir) : [];
+    const uploads    = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
+    const outputs    = fs.existsSync(outputsDir) ? fs.readdirSync(outputsDir) : [];
     res.json({ uploads, outputs, uploadsCount: uploads.length, outputsCount: outputs.length });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -129,12 +127,11 @@ app.get('/api/list-files', (req, res) => {
 app.get('/api/debug-uploads', (req, res) => {
   try {
     const uploadsDir = path.join(__dirname, 'uploads');
-    if (!fs.existsSync(uploadsDir)) {
+    if (!fs.existsSync(uploadsDir))
       return res.json({ success: true, count: 0, files: [], message: 'Uploads directory is empty' });
-    }
     const files = fs.readdirSync(uploadsDir).map(filename => {
       const filePath = path.join(uploadsDir, filename);
-      const stats = fs.statSync(filePath);
+      const stats    = fs.statSync(filePath);
       return { name: filename, size: stats.size, type: path.extname(filename), url: `${BASE_URL}/uploads/${filename}` };
     });
     res.json({ success: true, count: files.length, files });
@@ -147,11 +144,10 @@ app.get('/api/debug-uploads', (req, res) => {
 app.post('/api/export-video', express.json(), (req, res) => {
   console.log('🎬 Received async export request');
 
-  // LOCK: reject if another export is already running
   if (exportInProgress) {
     console.warn('⚠️  Export already in progress — rejected');
     return res.status(429).json({
-      error: 'An export is already in progress. Please wait for it to complete.'
+      error: 'An export is already in progress. Cancel it first or wait for it to complete.'
     });
   }
 
@@ -159,23 +155,42 @@ app.post('/api/export-video', express.json(), (req, res) => {
 
   if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
     tracks = [
-      { id: 'video-track', type: 'video', name: 'Video Track', clips: videoClips || [] },
-      { id: 'audio-track', type: 'audio', name: 'Audio Track', clips: audioClips || [] },
+      { id: 'video-track', type: 'video', name: 'Video Track',   clips: videoClips || [] },
+      { id: 'audio-track', type: 'audio', name: 'Audio Track',   clips: audioClips || [] },
       { id: 'text-track',  type: 'text',  name: 'Text Overlays', clips: [] }
     ];
   }
 
   const totalClips = tracks.reduce((n, t) => n + (t.clips?.length || 0), 0);
-  if (totalClips === 0) {
-    return res.status(400).json({ error: 'No clips provided' });
-  }
+  if (totalClips === 0) return res.status(400).json({ error: 'No clips provided' });
 
   const taskId = uuid();
   tasks[taskId] = { status: 'processing', outputUrl: null, error: null };
 
   processVideoAsync(taskId, { tracks, projectName });
-
   res.json({ taskId, message: 'Export started' });
+});
+
+// ── CANCEL EXPORT ─────────────────────────────────────────────────────────────
+app.post('/api/cancel-export', express.json(), (req, res) => {
+  if (!exportInProgress) {
+    return res.json({ success: false, message: 'No export is currently running' });
+  }
+
+  console.log('🛑 Cancel requested — killing FFmpeg…');
+  videoProcessor.cancel();
+
+  // Mark the task as cancelled so the frontend polling sees it immediately
+  if (currentTaskId && tasks[currentTaskId]) {
+    tasks[currentTaskId].status = 'cancelled';
+    tasks[currentTaskId].error  = 'Export cancelled by user';
+  }
+
+  exportInProgress = false;
+  currentTaskId    = null;
+
+  console.log('✅ Export cancelled');
+  res.json({ success: true, message: 'Export cancelled' });
 });
 
 // ── TASK STATUS ───────────────────────────────────────────────────────────────
@@ -185,15 +200,11 @@ app.get('/api/status/:taskId', (req, res) => {
   res.json(task);
 });
 
-// ── DOWNLOAD ENDPOINT ─────────────────────────────────────────────────────────
+// ── DOWNLOAD ──────────────────────────────────────────────────────────────────
 app.get('/api/download/:filename', (req, res) => {
   const filename = path.basename(req.params.filename);
   const filePath = path.join(__dirname, 'outputs', filename);
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'File not found' });
-  }
-
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('Content-Type', 'video/mp4');
   res.sendFile(filePath);
@@ -246,6 +257,7 @@ app.use((err, req, res, next) => {
 // ── BACKGROUND PROCESSOR ──────────────────────────────────────────────────────
 async function processVideoAsync(taskId, data) {
   exportInProgress = true;
+  currentTaskId    = taskId;
   console.log(`🔒 Export lock acquired — task ${taskId}`);
   try {
     const outputPath = await videoProcessor.processTimeline(data);
@@ -254,11 +266,20 @@ async function processVideoAsync(taskId, data) {
     tasks[taskId].outputUrl = `/api/download/${filename}`;
     console.log(`✅ Task ${taskId} completed → ${filename}`);
   } catch (err) {
-    tasks[taskId].status = 'failed';
-    tasks[taskId].error  = err.message;
-    console.error(`❌ Task ${taskId} failed:`, err.message);
+    if (err.message === 'CANCELLED') {
+      console.log(`🛑 Task ${taskId} was cancelled`);
+      if (tasks[taskId] && tasks[taskId].status !== 'cancelled') {
+        tasks[taskId].status = 'cancelled';
+        tasks[taskId].error  = 'Export cancelled by user';
+      }
+    } else {
+      tasks[taskId].status = 'failed';
+      tasks[taskId].error  = err.message;
+      console.error(`❌ Task ${taskId} failed:`, err.message);
+    }
   } finally {
     exportInProgress = false;
+    currentTaskId    = null;
     console.log(`🔓 Export lock released`);
   }
 }

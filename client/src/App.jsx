@@ -72,6 +72,7 @@ export default function App() {
   ]);
   const [uploading,     setUploading]     = useState(false);
   const [exporting,     setExporting]     = useState(false);
+  const [cancelling,    setCancelling]    = useState(false);
   const [sidePanel,     setSidePanel]     = useState("media");
   const [showTextModal, setShowTextModal] = useState(false);
   const [editTextClip,  setEditTextClip]  = useState(null);
@@ -95,6 +96,7 @@ export default function App() {
   const lastTimeRef  = useRef(null);
   const previewRef   = useRef(null);
   const videoEls     = useRef({});
+  const exportIntervalRef = useRef(null); // so we can clear it on cancel
 
   // ── FIX: audioRef is ALWAYS mounted — never conditional ──────────────────
   const audioRef = useRef(null);
@@ -498,7 +500,7 @@ export default function App() {
       showNotif("Export started — processing in background…");
       let attempts = 0;
       const maxAttempts = 300; // 15 minutes (300 × 3s)
-      const interval = setInterval(async () => {
+      exportIntervalRef.current = setInterval(async () => {
         attempts += 1;
         // Keep Koyeb instance alive — prevents shutdown during long exports
         fetch(`${API_URL}/api/health`).catch(() => {});
@@ -507,7 +509,8 @@ export default function App() {
           if (!statusRes.ok) throw new Error(`Status check failed: ${statusRes.status}`);
           const statusData = await statusRes.json();
           if (statusData.status === "success") {
-            clearInterval(interval);
+            clearInterval(exportIntervalRef.current);
+            exportIntervalRef.current = null;
             setExporting(false);
             const downloadUrl = statusData.outputUrl.startsWith("http")
               ? statusData.outputUrl : `${API_URL}${statusData.outputUrl}`;
@@ -518,18 +521,26 @@ export default function App() {
             a.click();
             document.body.removeChild(a);
             showNotif("✅ Export complete — downloading!");
+          } else if (statusData.status === "cancelled") {
+            clearInterval(exportIntervalRef.current);
+            exportIntervalRef.current = null;
+            setExporting(false);
+            showNotif("Export cancelled", "error");
           } else if (statusData.status === "failed") {
-            clearInterval(interval);
+            clearInterval(exportIntervalRef.current);
+            exportIntervalRef.current = null;
             setExporting(false);
             showNotif("Export failed — check console for details", "error");
             console.error("Export failed:", statusData.error);
           } else if (attempts >= maxAttempts) {
-            clearInterval(interval);
+            clearInterval(exportIntervalRef.current);
+            exportIntervalRef.current = null;
             setExporting(false);
             showNotif("Export timed out — try again", "error");
           }
         } catch (err) {
-          clearInterval(interval);
+          clearInterval(exportIntervalRef.current);
+          exportIntervalRef.current = null;
           setExporting(false);
           showNotif(`Export failed: ${err.message}`, "error");
         }
@@ -538,6 +549,25 @@ export default function App() {
       console.error("Export error:", err);
       showNotif(`Export failed: ${err.message}`, "error");
       setExporting(false);
+    }
+  };
+
+  /* ── CANCEL EXPORT ───────────────────────────────────────────────────────── */
+  const handleCancelExport = async () => {
+    setCancelling(true);
+    try {
+      await fetch(`${API_URL}/api/cancel-export`, { method: "POST" });
+      // Clear the polling interval so the UI stops waiting
+      if (exportIntervalRef.current) {
+        clearInterval(exportIntervalRef.current);
+        exportIntervalRef.current = null;
+      }
+      setExporting(false);
+      showNotif("Export cancelled", "error");
+    } catch {
+      showNotif("Could not reach server to cancel", "error");
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -579,6 +609,11 @@ export default function App() {
           <button className="tbtn export-btn" onClick={handleExport} disabled={exporting}>
             <IcExport /> {exporting ? "Exporting…" : "Export Video"}
           </button>
+          {exporting && (
+            <button className="tbtn cancel-btn" onClick={handleCancelExport} disabled={cancelling}>
+              {cancelling ? "Cancelling…" : "✕ Cancel"}
+            </button>
+          )}
         </header>
 
         {/* MAIN AREA */}
@@ -1118,6 +1153,9 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 .export-btn{background:var(--acc);color:#0a1f12;border-color:var(--acc);font-weight:600;margin-left:auto;}
 .export-btn:hover{background:var(--acc2);}
 .export-btn:disabled{opacity:.5;cursor:not-allowed;}
+.cancel-btn{background:transparent;color:var(--red);border-color:var(--red);font-weight:600;}
+.cancel-btn:hover{background:rgba(239,68,68,.15);color:var(--red);}
+.cancel-btn:disabled{opacity:.5;cursor:not-allowed;}
 .timecode{font-family:'DM Mono',monospace;font-size:12px;color:var(--t2);padding:4px 10px;background:var(--bg);border-radius:6px;border:1px solid var(--b1);}
 .sidebar{background:var(--s1);border-right:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden;}
 .stabs{display:flex;border-bottom:1px solid var(--b1);}
