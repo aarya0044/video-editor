@@ -486,6 +486,8 @@ export default function App() {
       const maxAttempts = 300;
       const interval = setInterval(async () => {
         attempts += 1;
+        // Keep Koyeb instance alive — prevents shutdown during long exports
+        fetch(`${API_URL}/api/health`).catch(() => {});
         try {
           const statusRes  = await fetch(`${API_URL}/api/status/${taskId}`);
           if (!statusRes.ok) throw new Error(`Status check failed: ${statusRes.status}`);
