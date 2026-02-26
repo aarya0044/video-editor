@@ -62,4 +62,4 @@ temp/
 *.jpg
 *.png
 *.mov
-*.avi
+*.avi!server/public/audio/*.mp3 
