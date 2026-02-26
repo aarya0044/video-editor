@@ -13,7 +13,6 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-
 const PORT = process.env.PORT || 5000;
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -23,8 +22,10 @@ const BASE_URL =
 
 const videoProcessor = new VideoProcessor();
 
-// ── CORS ──────────────────────────────────────────────────────────────────────
+// ── EXPORT LOCK — prevents multiple simultaneous FFmpeg jobs ──────────────────
+let exportInProgress = false;
 
+// ── CORS ──────────────────────────────────────────────────────────────────────
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
@@ -33,18 +34,15 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, callback) => {
-    // allow server-to-server & curl requests
     if (!origin) return callback(null, true);
-
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-
+    if (allowedOrigins.includes(origin)) return callback(null, true);
     console.error("❌ Blocked by CORS:", origin);
     return callback(new Error("Not allowed by CORS"));
   },
   credentials: true
 }));
+
+app.options("*", cors());
 
 // ── MULTER ────────────────────────────────────────────────────────────────────
 const storage = multer.diskStorage({
@@ -99,6 +97,7 @@ app.post('/api/upload', upload.array('files'), (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'healthy',
+    exportInProgress,
     timestamp: new Date().toISOString(),
     environment: isProduction ? 'production' : 'development',
     baseUrl: BASE_URL
@@ -148,6 +147,14 @@ app.get('/api/debug-uploads', (req, res) => {
 app.post('/api/export-video', express.json(), (req, res) => {
   console.log('🎬 Received async export request');
 
+  // LOCK: reject if another export is already running
+  if (exportInProgress) {
+    console.warn('⚠️  Export already in progress — rejected');
+    return res.status(429).json({
+      error: 'An export is already in progress. Please wait for it to complete.'
+    });
+  }
+
   let { tracks, videoClips, audioClips, projectName = `video-${Date.now()}` } = req.body;
 
   if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
@@ -178,17 +185,15 @@ app.get('/api/status/:taskId', (req, res) => {
   res.json(task);
 });
 
-// ── DOWNLOAD ENDPOINT — forces browser download instead of opening in tab ─────
-// Frontend should hit this URL for the actual file download
+// ── DOWNLOAD ENDPOINT ─────────────────────────────────────────────────────────
 app.get('/api/download/:filename', (req, res) => {
-  const filename  = path.basename(req.params.filename); // prevent path traversal
-  const filePath  = path.join(__dirname, 'outputs', filename);
+  const filename = path.basename(req.params.filename);
+  const filePath = path.join(__dirname, 'outputs', filename);
 
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: 'File not found' });
   }
 
-  // Content-Disposition: attachment forces a Save dialog instead of opening in browser
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('Content-Type', 'video/mp4');
   res.sendFile(filePath);
@@ -199,7 +204,9 @@ app.post('/api/clear-files', (req, res) => {
   try {
     ['uploads', 'outputs', 'temp'].forEach(dir => {
       const d = path.join(__dirname, dir);
-      if (fs.existsSync(d)) fs.readdirSync(d).forEach(f => fs.unlinkSync(path.join(d, f)));
+      if (fs.existsSync(d)) fs.readdirSync(d).forEach(f => {
+        try { fs.unlinkSync(path.join(d, f)); } catch (_) {}
+      });
     });
     res.json({ success: true, message: 'All files cleared' });
   } catch (error) {
@@ -209,8 +216,6 @@ app.post('/api/clear-files', (req, res) => {
 
 // ── STATIC FILES ──────────────────────────────────────────────────────────────
 app.use('/uploads', express.static('uploads'));
-// NOTE: /outputs static is intentionally NOT served — use /api/download/:filename instead
-// so the browser always gets Content-Disposition: attachment
 
 const audioDir = path.join(__dirname, 'public', 'audio');
 if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true });
@@ -240,24 +245,26 @@ app.use((err, req, res, next) => {
 
 // ── BACKGROUND PROCESSOR ──────────────────────────────────────────────────────
 async function processVideoAsync(taskId, data) {
+  exportInProgress = true;
+  console.log(`🔒 Export lock acquired — task ${taskId}`);
   try {
     const outputPath = await videoProcessor.processTimeline(data);
     const filename   = path.basename(outputPath);
-
     tasks[taskId].status    = 'success';
-    // Return the download API URL so the frontend hits our download endpoint
     tasks[taskId].outputUrl = `/api/download/${filename}`;
-
     console.log(`✅ Task ${taskId} completed → ${filename}`);
   } catch (err) {
     tasks[taskId].status = 'failed';
     tasks[taskId].error  = err.message;
-    console.error(`❌ Task ${taskId} failed`, err.message);
+    console.error(`❌ Task ${taskId} failed:`, err.message);
+  } finally {
+    exportInProgress = false;
+    console.log(`🔓 Export lock released`);
   }
 }
 
 // ── START ─────────────────────────────────────────────────────────────────────
-app.listen(PORT,"0.0.0.0", () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 EditFlow Server Started!`);
   console.log(`📍 Environment: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
   console.log(`📡 Base URL: ${BASE_URL}`);

@@ -252,7 +252,12 @@ export default function App() {
   const addClipToTimeline = useCallback(async (file, startTime = null, trackType = "video") => {
     let duration = 5;
     if (file.type?.includes("video")) {
-      try { duration = await getVideoDuration(file.url); } catch {}
+      try {
+        duration = await getVideoDuration(file.url);
+        if (duration > 300) {
+          showNotif(`⚠️ "${file.name}" is ${Math.round(duration/60)} min long — trim it in the timeline to under 5 min before exporting`, "error");
+        }
+      } catch {}
     }
     const track = tracks.find(t => t.type === trackType);
     const insertAt = startTime ?? (track?.clips.length ? Math.max(...track.clips.map(c => c.end)) : 0);
@@ -475,7 +480,16 @@ export default function App() {
       });
       if (!response.ok) {
         let msg = `Server error ${response.status}`;
-        try { const d = await response.json(); msg = d.error || msg; } catch {}
+        try {
+          const d = await response.json();
+          msg = d.error || msg;
+          // 429 = another export is running
+          if (response.status === 429) {
+            showNotif("⏳ Server is busy with another export. Please wait a moment and try again.", "error");
+            setExporting(false);
+            return;
+          }
+        } catch {}
         throw new Error(msg);
       }
       const d = await response.json();
@@ -483,7 +497,7 @@ export default function App() {
       if (!taskId) throw new Error(d?.error || "No task ID returned from server");
       showNotif("Export started — processing in background…");
       let attempts = 0;
-      const maxAttempts = 300;
+      const maxAttempts = 300; // 15 minutes (300 × 3s)
       const interval = setInterval(async () => {
         attempts += 1;
         // Keep Koyeb instance alive — prevents shutdown during long exports
