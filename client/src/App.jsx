@@ -483,7 +483,7 @@ export default function App() {
       if (!taskId) throw new Error(d?.error || "No task ID returned from server");
       showNotif("Export started — processing in background…");
       let attempts = 0;
-      const maxAttempts = 120;
+      const maxAttempts = 300;
       const interval = setInterval(async () => {
         attempts += 1;
         try {
