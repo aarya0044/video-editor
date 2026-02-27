@@ -308,11 +308,14 @@ class VideoProcessor {
     }
 
     // Concatenate all chunks into the final clip output
-    await this.concatVideos(chunkPaths, outPath);
+    await this.concatVideos(chunkPaths, outPath, true); // stream copy — same resolution chunks
   }
 
   // ── Concatenate video files ───────────────────────────────────────────────
-  concatVideos(files, outPath) {
+  // useStreamCopy=true: skip re-encoding — 10-20x faster.
+  // Used when all inputs share the same codec/resolution (e.g. chunks).
+  // useStreamCopy=false (default): re-encode, for clips with different sources.
+  concatVideos(files, outPath, useStreamCopy = false) {
     return new Promise((resolve, reject) => {
       if (this.cancelled) return reject(new Error("CANCELLED"));
 
@@ -327,18 +330,19 @@ class VideoProcessor {
         files.map(f => "file '" + f.replace(/'/g,"'\\''") + "'").join("\n")
       );
 
+      const outputOpts = useStreamCopy
+        ? ["-c", "copy"]
+        : ["-c:v","libx264","-preset","ultrafast","-crf","28","-c:a","aac","-ar","44100","-ac","2"];
+
       const cmd = ffmpeg()
         .input(listFile)
         .inputOptions(["-f","concat","-safe","0"])
-        .outputOptions([
-          "-c:v","libx264","-preset","ultrafast","-crf","28",
-          "-c:a","aac","-ar","44100","-ac","2"
-        ])
+        .outputOptions(outputOpts)
         .output(outPath);
 
       this.currentCmd = cmd;
       cmd
-        .on("start", c => console.log("  [concat] " + c.slice(0,120)))
+        .on("start", c => console.log("  [concat:" + (useStreamCopy ? "copy" : "encode") + "] " + c.slice(0,120)))
         .on("end", () => {
           this.currentCmd = null;
           try { fs.unlinkSync(listFile); } catch (_) {}
@@ -490,7 +494,7 @@ class VideoProcessor {
     console.log("\n🔗 Concatenating…");
     const concatPath = path.join(this.tempDir, "concat_" + Date.now() + ".mp4");
     cleanup.push(concatPath);
-    await this.concatVideos(rendered, concatPath);
+    await this.concatVideos(rendered, concatPath, true); // stream copy — all clips same res
 
     // ── STEP 3: Burn subtitles ─────────────────────────────────────────────
     let baseVideo = concatPath;
