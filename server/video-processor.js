@@ -14,13 +14,44 @@ if (fs.existsSync("/usr/bin/ffprobe")) {
   ffmpeg.setFfprobePath("/usr/bin/ffprobe");
 }
 
+// ── OPTION 3: Resolution tier based on total timeline duration ───────────────
+// Shorter videos get higher quality. Longer videos drop resolution so FFmpeg
+// finishes within the free-tier memory/CPU limits.
+//
+//  Under 90s  → 1280×720  (720p)   — best quality
+//  90s–3min   → 854×480   (480p)   — medium
+//  3min–6min  → 640×360   (360p)   — lower, but completes reliably
+//  Over 6min  → rejected in index.js before we even get here
+//
+function getScaleFilter(totalDurationSeconds) {
+  let w, h;
+  if (totalDurationSeconds < 90) {
+    w = 1280; h = 720;
+  } else if (totalDurationSeconds < 180) {
+    w = 854;  h = 480;
+  } else {
+    w = 640;  h = 360;
+  }
+  console.log(`  📐 Output resolution: ${w}×${h} (duration ${Math.round(totalDurationSeconds)}s)`);
+  return {
+    scale: `scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
+           `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1`,
+    width: w,
+    height: h,
+  };
+}
+
+// ── OPTION 2: Chunk size in seconds ─────────────────────────────────────────
+// Each video clip longer than this will be split and processed in chunks.
+// 45 seconds per chunk keeps each FFmpeg job well under 2 minutes on free tier.
+const CHUNK_SECONDS = 45;
+
 class VideoProcessor {
   constructor() {
     this.tempDir    = path.join(__dirname, "temp");
     this.outputsDir = path.join(__dirname, "outputs");
     this.uploadsDir = path.join(__dirname, "uploads");
     this.audioDir   = path.join(__dirname, "public", "audio");
-    // ── Track the currently-running FFmpeg command so we can kill it ────────
     this.currentCmd = null;
     this.cancelled  = false;
     this.ensureDirs();
@@ -32,33 +63,27 @@ class VideoProcessor {
     });
   }
 
-  // ── Cancel: kill current FFmpeg process ──────────────────────────────────
   cancel() {
     this.cancelled = true;
     if (this.currentCmd) {
-      try {
-        this.currentCmd.kill("SIGKILL");
-        console.log("🛑 FFmpeg process killed");
-      } catch (e) {
-        console.warn("⚠️  Could not kill FFmpeg:", e.message);
-      }
+      try { this.currentCmd.kill("SIGKILL"); console.log("🛑 FFmpeg process killed"); }
+      catch (e) { console.warn("⚠️  Could not kill FFmpeg:", e.message); }
       this.currentCmd = null;
     }
   }
 
-  // ── Reset cancel flag before a new export ────────────────────────────────
   reset() {
     this.cancelled  = false;
     this.currentCmd = null;
   }
 
-  // ── Resolve clip path ─────────────────────────────────────────────────────
+  // ── Resolve clip file path ────────────────────────────────────────────────
   resolveFilePath(clip) {
     const raw = clip.src || clip.url || "";
 
     if (raw.includes("/uploads/")) {
-      const file = decodeURIComponent(raw.split("/uploads/")[1]);
-      const full = path.join(this.uploadsDir, file);
+      const file  = decodeURIComponent(raw.split("/uploads/")[1]);
+      const full  = path.join(this.uploadsDir, file);
       if (fs.existsSync(full)) return full;
       const ext   = path.extname(file).toLowerCase();
       const base  = path.basename(file, ext);
@@ -81,7 +106,7 @@ class VideoProcessor {
     return null;
   }
 
-  // ── Format seconds → ASS time H:MM:SS.cc ─────────────────────────────────
+  // ── ASS time formatter ────────────────────────────────────────────────────
   _fmtTime(sec) {
     const h  = Math.floor(sec / 3600);
     const m  = Math.floor((sec % 3600) / 60);
@@ -92,12 +117,12 @@ class VideoProcessor {
   }
 
   // ── Build ASS subtitle file ───────────────────────────────────────────────
-  buildAssFile(textClips, outPath) {
+  buildAssFile(textClips, outPath, resWidth = 1280, resHeight = 720) {
     const lines = [
       "[Script Info]",
       "ScriptType: v4.00+",
-      "PlayResX: 1280",
-      "PlayResY: 720",
+      `PlayResX: ${resWidth}`,
+      `PlayResY: ${resHeight}`,
       "WrapStyle: 0",
       "",
       "[V4+ Styles]",
@@ -108,7 +133,7 @@ class VideoProcessor {
 
     for (const clip of textClips) {
       const ov = clip.textOverlay;
-      if (!ov || !ov.enabled || !ov.text || !ov.text.trim()) continue;
+      if (!ov || !ov.enabled || !ov.text?.trim()) continue;
 
       const fontSize  = Math.max(8, parseInt(ov.fontSize) || 32);
       const hex       = (ov.fontColor || "#ffffff").replace("#","").padEnd(6,"0");
@@ -133,7 +158,8 @@ class VideoProcessor {
 
       let posTag = "";
       if (ov.position === "custom" && ov.px != null && ov.py != null) {
-        posTag = "{\\pos(" + Math.round(ov.px * 12.8) + "," + Math.round(ov.py * 7.2) + ")}";
+        posTag = "{\\pos(" + Math.round(ov.px * (resWidth / 100)) + "," +
+                 Math.round(ov.py * (resHeight / 100)) + ")}";
       }
 
       const safeText = String(ov.text)
@@ -153,27 +179,14 @@ class VideoProcessor {
     return outPath;
   }
 
-  // ── Render one clip ───────────────────────────────────────────────────────
-  processVideoClip(clip, outPath) {
+  // ── Render one SHORT clip (or chunk) → normalised MP4 ────────────────────
+  // OPTION 2: clips longer than CHUNK_SECONDS are automatically chunked by
+  // processVideoClipChunked() below — this method handles one chunk at a time.
+  _renderSegment(input, outPath, { sourceStart, duration, isImage, isMuted, volume, scaleFilter }) {
     return new Promise((resolve, reject) => {
       if (this.cancelled) return reject(new Error("CANCELLED"));
 
-      const input = this.resolveFilePath(clip);
-      if (!input) return reject(new Error("File not found: " + clip.name));
-
-      const duration    = clip.end - clip.start;
-      if (duration <= 0.01) return reject(new Error("Zero duration: " + clip.name));
-
-      const sourceStart = clip.mediaOffset || 0;
-      const isImage     = clip.type?.includes("image") ||
-        /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(input);
-      const isMuted     = clip.muted === true;
-      const volume      = clip.volume != null ? clip.volume : 1.0;
-
-      const SCALE =
-        "scale=1280:720:force_original_aspect_ratio=decrease," +
-        "pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1";
-
+      const SCALE = scaleFilter;
       let cmd = ffmpeg();
 
       if (isImage) {
@@ -228,18 +241,77 @@ class VideoProcessor {
       this.currentCmd = cmd;
       cmd
         .output(outPath)
-        .on("start", c => console.log("  [clip] " + c.slice(0,140)))
+        .on("start", c => console.log("    [seg] " + c.slice(0,120)))
         .on("end",   () => { this.currentCmd = null; resolve(outPath); })
         .on("error", err => {
           this.currentCmd = null;
           if (this.cancelled) return reject(new Error("CANCELLED"));
-          reject(new Error("clip: " + err.message));
+          reject(new Error("segment: " + err.message));
         })
         .run();
     });
   }
 
-  // ── Concatenate ───────────────────────────────────────────────────────────
+  // ── OPTION 2: Process one clip, chunked if needed ─────────────────────────
+  // If the clip duration > CHUNK_SECONDS, it's split into multiple segments
+  // which are encoded separately then concatenated. Each segment stays short
+  // enough to avoid memory/timeout issues on the free tier.
+  async processVideoClipChunked(clip, outPath, scaleFilter, cleanup) {
+    if (this.cancelled) throw new Error("CANCELLED");
+
+    const input       = this.resolveFilePath(clip);
+    if (!input) throw new Error("File not found: " + clip.name);
+
+    const clipDuration = clip.end - clip.start;
+    if (clipDuration <= 0.01) throw new Error("Zero duration: " + clip.name);
+
+    const sourceStart = clip.mediaOffset || 0;
+    const isImage     = clip.type?.includes("image") ||
+      /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(input);
+    const isMuted     = clip.muted === true;
+    const volume      = clip.volume != null ? clip.volume : 1.0;
+
+    // Short clip — render directly, no chunking needed
+    if (isImage || clipDuration <= CHUNK_SECONDS) {
+      console.log(`    → single segment (${clipDuration.toFixed(1)}s)`);
+      await this._renderSegment(input, outPath, {
+        sourceStart, duration: clipDuration, isImage, isMuted, volume, scaleFilter
+      });
+      return;
+    }
+
+    // Long clip — split into chunks of CHUNK_SECONDS
+    const numChunks = Math.ceil(clipDuration / CHUNK_SECONDS);
+    console.log(`    → chunking into ${numChunks} × ${CHUNK_SECONDS}s segments`);
+
+    const chunkPaths = [];
+    for (let i = 0; i < numChunks; i++) {
+      if (this.cancelled) throw new Error("CANCELLED");
+
+      const chunkStart    = sourceStart + (i * CHUNK_SECONDS);
+      const chunkDuration = Math.min(CHUNK_SECONDS, clipDuration - (i * CHUNK_SECONDS));
+      const chunkPath     = path.join(
+        this.tempDir, `chunk_${Date.now()}_${i}.mp4`
+      );
+      cleanup.push(chunkPath);
+      chunkPaths.push(chunkPath);
+
+      console.log(`    [chunk ${i+1}/${numChunks}] offset=${chunkStart.toFixed(1)}s dur=${chunkDuration.toFixed(1)}s`);
+      await this._renderSegment(input, chunkPath, {
+        sourceStart: chunkStart,
+        duration:    chunkDuration,
+        isImage:     false,
+        isMuted,
+        volume,
+        scaleFilter
+      });
+    }
+
+    // Concatenate all chunks into the final clip output
+    await this.concatVideos(chunkPaths, outPath);
+  }
+
+  // ── Concatenate video files ───────────────────────────────────────────────
   concatVideos(files, outPath) {
     return new Promise((resolve, reject) => {
       if (this.cancelled) return reject(new Error("CANCELLED"));
@@ -266,7 +338,7 @@ class VideoProcessor {
 
       this.currentCmd = cmd;
       cmd
-        .on("start", c => console.log("  [concat] " + c.slice(0,140)))
+        .on("start", c => console.log("  [concat] " + c.slice(0,120)))
         .on("end", () => {
           this.currentCmd = null;
           try { fs.unlinkSync(listFile); } catch (_) {}
@@ -292,14 +364,13 @@ class VideoProcessor {
     });
   }
 
-  // ── Run ffmpeg command as promise (with cancel support) ───────────────────
+  // ── Run ffmpeg command as promise ─────────────────────────────────────────
   _run(cmd) {
     return new Promise((resolve, reject) => {
       if (this.cancelled) return reject(new Error("CANCELLED"));
-
       this.currentCmd = cmd;
       cmd
-        .on("start", c => console.log("  [ffmpeg] " + c.slice(0,140)))
+        .on("start", c => console.log("  [ffmpeg] " + c.slice(0,120)))
         .on("end",   () => { this.currentCmd = null; console.log("  ✓ done"); resolve(); })
         .on("error", err => {
           this.currentCmd = null;
@@ -311,7 +382,7 @@ class VideoProcessor {
     });
   }
 
-  // ── Mix audio ─────────────────────────────────────────────────────────────
+  // ── Mix external audio into video ─────────────────────────────────────────
   async mixAudio(videoPath, audioItems, outPath, duration) {
     if (this.cancelled) throw new Error("CANCELLED");
 
@@ -368,7 +439,7 @@ class VideoProcessor {
   //  MAIN PIPELINE
   // ═══════════════════════════════════════════════════════════════════════════
   async processTimeline({ tracks, projectName }) {
-    this.reset(); // clear any leftover cancel flag from previous run
+    this.reset();
     this.ensureDirs();
 
     const videoTrack = tracks.find(t => t.type === "video");
@@ -381,10 +452,14 @@ class VideoProcessor {
     const outPath = path.join(this.outputsDir, projectName + ".mp4");
     const cleanup = [];
 
+    // ── OPTION 3: Pick resolution based on total duration ──────────────────
+    const { scale: scaleFilter, width: resW, height: resH } = getScaleFilter(endTime);
+
     console.log("\n🎬 Exporting: " + projectName);
+    console.log(`  Total duration: ${endTime.toFixed(1)}s`);
     tracks.forEach(t => console.log("  " + t.type + ": " + (t.clips?.length || 0) + " clips"));
 
-    // ── STEP 1: Render clips ──────────────────────────────────────────────
+    // ── STEP 1: Render clips (with chunking for long clips) ────────────────
     console.log("\n📽  Rendering clips…");
     const sorted   = [...videoTrack.clips].sort((a,b) => a.start - b.start);
     const rendered = [];
@@ -394,12 +469,13 @@ class VideoProcessor {
       const clip = sorted[i];
       const p    = path.join(this.tempDir, "clip_" + i + "_" + Date.now() + ".mp4");
       cleanup.push(p);
+      const clipDur = (clip.end - clip.start).toFixed(1);
       console.log(
-        "  [" + (i+1) + "/" + sorted.length + '] "' +
-        clip.name + '" muted=' + !!clip.muted + " vol=" + (clip.volume ?? 1)
+        `  [${i+1}/${sorted.length}] "${clip.name}" ${clipDur}s muted=${!!clip.muted} vol=${clip.volume ?? 1}`
       );
       try {
-        await this.processVideoClip(clip, p);
+        // OPTION 2: automatically chunks long clips
+        await this.processVideoClipChunked(clip, p, scaleFilter, cleanup);
         rendered.push(p);
       } catch (e) {
         if (e.message === "CANCELLED") throw e;
@@ -409,21 +485,22 @@ class VideoProcessor {
 
     if (!rendered.length) throw new Error("None of the video clips could be processed");
 
-    // ── STEP 2: Concatenate ───────────────────────────────────────────────
+    // ── STEP 2: Concatenate rendered clips ────────────────────────────────
     if (this.cancelled) throw new Error("CANCELLED");
     console.log("\n🔗 Concatenating…");
     const concatPath = path.join(this.tempDir, "concat_" + Date.now() + ".mp4");
     cleanup.push(concatPath);
     await this.concatVideos(rendered, concatPath);
 
-    // ── STEP 3: Burn subtitles ────────────────────────────────────────────
+    // ── STEP 3: Burn subtitles ─────────────────────────────────────────────
     let baseVideo = concatPath;
 
     if (textTrack?.clips?.length) {
       if (this.cancelled) throw new Error("CANCELLED");
       const assPath = path.join(this.tempDir, "subs_" + Date.now() + ".ass");
       cleanup.push(assPath);
-      const written = this.buildAssFile(textTrack.clips, assPath);
+      // Pass actual resolution so subtitle positions scale correctly
+      const written = this.buildAssFile(textTrack.clips, assPath, resW, resH);
 
       if (written) {
         console.log("\n📝 Burning subtitles…");
@@ -445,7 +522,7 @@ class VideoProcessor {
       }
     }
 
-    // ── STEP 4: Mix audio ─────────────────────────────────────────────────
+    // ── STEP 4: Mix audio ──────────────────────────────────────────────────
     if (audioTrack?.clips?.length) {
       if (this.cancelled) throw new Error("CANCELLED");
       console.log("\n🎵 Processing audio…");
@@ -468,10 +545,7 @@ class VideoProcessor {
             ffmpeg(lp)
               .inputOptions(["-ss", String(offset)])
               .audioFilters("volume=" + volume)
-              .outputOptions([
-                "-t", String(duration),
-                "-c:a","aac","-ar","44100","-ac","2","-vn"
-              ])
+              .outputOptions(["-t", String(duration), "-c:a","aac","-ar","44100","-ac","2","-vn"])
               .output(ap)
           );
           audioItems.push({ path: ap, start: clip.start });
@@ -501,7 +575,7 @@ class VideoProcessor {
       );
     }
 
-    // ── Cleanup ───────────────────────────────────────────────────────────
+    // ── Cleanup temp files ─────────────────────────────────────────────────
     cleanup.forEach(p => {
       try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch (_) {}
     });

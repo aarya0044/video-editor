@@ -164,6 +164,19 @@ app.post('/api/export-video', express.json(), (req, res) => {
   const totalClips = tracks.reduce((n, t) => n + (t.clips?.length || 0), 0);
   if (totalClips === 0) return res.status(400).json({ error: 'No clips provided' });
 
+  // Reject timelines over 6 minutes — chunking handles up to 6min on free tier
+  const videoTrack   = tracks.find(t => t.type === 'video');
+  const totalSeconds = videoTrack?.clips?.length
+    ? Math.max(...videoTrack.clips.map(c => c.end))
+    : 0;
+  if (totalSeconds > 360) {
+    return res.status(400).json({
+      error: `Timeline is ${Math.round(totalSeconds)}s (${(totalSeconds/60).toFixed(1)} min). ` +
+             `Maximum is 6 minutes on the free tier. Please trim your clips.`
+    });
+  }
+  console.log(`  Timeline: ${totalSeconds.toFixed(1)}s — accepted`);
+
   const taskId = uuid();
   tasks[taskId] = { status: 'processing', outputUrl: null, error: null };
 
@@ -259,6 +272,22 @@ async function processVideoAsync(taskId, data) {
   exportInProgress = true;
   currentTaskId    = taskId;
   console.log(`🔒 Export lock acquired — task ${taskId}`);
+
+  // Backend timeout: kill FFmpeg and release lock after 12 minutes.
+  // Ensures lock ALWAYS releases even if the frontend gave up polling.
+  const TIMEOUT_MS = 12 * 60 * 1000;
+  const timeoutHandle = setTimeout(() => {
+    console.warn(`⏰ Task ${taskId} hit backend timeout — force-killing FFmpeg`);
+    videoProcessor.cancel();
+    if (tasks[taskId] && tasks[taskId].status === 'processing') {
+      tasks[taskId].status = 'failed';
+      tasks[taskId].error  = 'Export timed out on server (12 min limit)';
+    }
+    exportInProgress = false;
+    currentTaskId    = null;
+    console.log(`🔓 Export lock force-released by timeout`);
+  }, TIMEOUT_MS);
+
   try {
     const outputPath = await videoProcessor.processTimeline(data);
     const filename   = path.basename(outputPath);
@@ -278,11 +307,13 @@ async function processVideoAsync(taskId, data) {
       console.error(`❌ Task ${taskId} failed:`, err.message);
     }
   } finally {
+    clearTimeout(timeoutHandle);
     exportInProgress = false;
     currentTaskId    = null;
     console.log(`🔓 Export lock released`);
   }
 }
+
 
 // ── START ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, "0.0.0.0", () => {
