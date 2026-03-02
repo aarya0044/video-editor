@@ -1048,7 +1048,18 @@ export default function App() {
         <div className="fp-overlay" onClick={() => { setIsPlaying(false); setFullPreview(false); }}>
           <div className="fp-box" onClick={e => e.stopPropagation()}>
             <div className="fp-header">
+              {/* Back button — left side, prominent */}
+              <button
+                className="fp-back-btn"
+                onClick={() => { setIsPlaying(false); setFullPreview(false); }}
+                title="Back to editor"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                Back to Editor
+              </button>
+
               <span className="fp-title">Preview — {fmt(playhead)} / {fmt(totalDuration)}</span>
+
               <div style={{display:"flex",gap:8,alignItems:"center"}}>
                 <button className="fp-ctrl" onClick={() => { setPlayhead(0); setIsPlaying(false); }}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
@@ -1058,9 +1069,6 @@ export default function App() {
                     ? <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
                     : <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg>
                   }
-                </button>
-                <button className="fp-ctrl" style={{border:"1px solid var(--red)",color:"var(--red)"}} onClick={() => { setIsPlaying(false); setFullPreview(false); }}>
-                  <IcMinimize /> Close
                 </button>
               </div>
             </div>
@@ -1326,6 +1334,8 @@ select.modal-inp{appearance:none;}
 .fp-overlay{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:300;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);}
 .fp-box{background:var(--bg);border:1px solid var(--b2);border-radius:14px;overflow:hidden;width:min(1100px,96vw);box-shadow:0 40px 100px rgba(0,0,0,.8);display:flex;flex-direction:column;}
 .fp-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--b1);background:var(--s1);}
+.fp-back-btn{display:flex;align-items:center;gap:6px;padding:7px 14px;background:var(--s2);border:1px solid var(--b2);border-radius:8px;color:var(--t1);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.fp-back-btn:hover{background:var(--acc);color:#0a1f12;border-color:var(--acc);}
 .fp-title{font-size:13px;font-weight:600;font-family:'DM Mono',monospace;color:var(--t2);}
 .fp-canvas{aspect-ratio:16/9;background:#000;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;}
 .fp-ctrl{display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:6px;border:1px solid var(--b2);background:var(--s2);color:var(--t2);font-size:11px;cursor:pointer;transition:all .15s;font-family:inherit;}
