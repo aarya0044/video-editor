@@ -14,25 +14,33 @@ if (fs.existsSync("/usr/bin/ffprobe")) {
   ffmpeg.setFfprobePath("/usr/bin/ffprobe");
 }
 
+// ── Aspect ratio definitions ─────────────────────────────────────────────────
+// Each ratio has base dimensions. Duration scaling shrinks them on free tier.
+const RATIO_SIZES = {
+  "16:9": { baseW: 1280, baseH: 720  },
+  "9:16": { baseW: 720,  baseH: 1280 },
+  "1:1":  { baseW: 720,  baseH: 720  },
+  "4:5":  { baseW: 720,  baseH: 900  },
+};
+
 // ── OPTION 3: Resolution tier based on total timeline duration ───────────────
 // Shorter videos get higher quality. Longer videos drop resolution so FFmpeg
 // finishes within the free-tier memory/CPU limits.
+// The ratio parameter controls the canvas shape (16:9, 9:16, 1:1, 4:5).
 //
-//  Under 90s  → 1280×720  (720p)   — best quality
-//  90s–3min   → 854×480   (480p)   — medium
-//  3min–6min  → 640×360   (360p)   — lower, but completes reliably
-//  Over 6min  → rejected in index.js before we even get here
-//
-function getScaleFilter(totalDurationSeconds) {
-  let w, h;
-  if (totalDurationSeconds < 90) {
-    w = 1280; h = 720;
-  } else if (totalDurationSeconds < 180) {
-    w = 854;  h = 480;
-  } else {
-    w = 640;  h = 360;
-  }
-  console.log(`  📐 Output resolution: ${w}×${h} (duration ${Math.round(totalDurationSeconds)}s)`);
+function getScaleFilter(totalDurationSeconds, ratio = "16:9") {
+  const { baseW, baseH } = RATIO_SIZES[ratio] || RATIO_SIZES["16:9"];
+
+  // Scale factor drops for longer videos (free tier memory limit)
+  let factor;
+  if (totalDurationSeconds < 90)       factor = 1.0;   // full res
+  else if (totalDurationSeconds < 180) factor = 0.667; // ~480p equivalent
+  else                                 factor = 0.5;   // ~360p equivalent
+
+  const w = Math.round(baseW * factor / 2) * 2; // must be even for libx264
+  const h = Math.round(baseH * factor / 2) * 2;
+
+  console.log(`  📐 Output: ${w}×${h} (ratio ${ratio}, duration ${Math.round(totalDurationSeconds)}s)`);
   return {
     scale: `scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
            `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1`,
@@ -442,7 +450,7 @@ class VideoProcessor {
   // ═══════════════════════════════════════════════════════════════════════════
   //  MAIN PIPELINE
   // ═══════════════════════════════════════════════════════════════════════════
-  async processTimeline({ tracks, projectName }) {
+  async processTimeline({ tracks, projectName, ratio = '16:9' }) {
     this.reset();
     this.ensureDirs();
 
@@ -457,7 +465,7 @@ class VideoProcessor {
     const cleanup = [];
 
     // ── OPTION 3: Pick resolution based on total duration ──────────────────
-    const { scale: scaleFilter, width: resW, height: resH } = getScaleFilter(endTime);
+    const { scale: scaleFilter, width: resW, height: resH } = getScaleFilter(endTime, ratio);
 
     console.log("\n🎬 Exporting: " + projectName);
     console.log(`  Total duration: ${endTime.toFixed(1)}s`);

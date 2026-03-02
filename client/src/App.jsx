@@ -73,6 +73,7 @@ export default function App() {
   const [uploading,     setUploading]     = useState(false);
   const [exporting,     setExporting]     = useState(false);
   const [cancelling,    setCancelling]    = useState(false);
+  const [exportRatio,   setExportRatio]   = useState("16:9");
   const [sidePanel,     setSidePanel]     = useState("media");
   const [showTextModal, setShowTextModal] = useState(false);
   const [editTextClip,  setEditTextClip]  = useState(null);
@@ -478,7 +479,7 @@ export default function App() {
       console.log("📤 Exporting:", cleanTracks.map(t => `${t.type}:${t.clips.length}`).join(", "));
       const response = await fetch(`${API_URL}/api/export-video`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tracks: cleanTracks, projectName: `project_${Date.now()}` }),
+        body: JSON.stringify({ tracks: cleanTracks, projectName: `project_${Date.now()}`, ratio: exportRatio }),
       });
       if (!response.ok) {
         let msg = `Server error ${response.status}`;
@@ -606,6 +607,26 @@ export default function App() {
             <IcTrash /> Delete
           </button>
           <div className="timecode">{fmt(playhead)}</div>
+
+          {/* RATIO SELECTOR */}
+          <div className="ratio-group">
+            {[
+              { label: "16:9", title: "Landscape — YouTube, Desktop" },
+              { label: "9:16", title: "Vertical — Reels, TikTok, Shorts" },
+              { label: "1:1",  title: "Square — Instagram Post" },
+              { label: "4:5",  title: "Portrait — Instagram Portrait" },
+            ].map(r => (
+              <button
+                key={r.label}
+                className={`ratio-btn${exportRatio === r.label ? " active" : ""}`}
+                onClick={() => setExportRatio(r.label)}
+                title={r.title}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+
           <button className="tbtn export-btn" onClick={handleExport} disabled={exporting}>
             <IcExport /> {exporting ? "Exporting…" : "Export Video"}
           </button>
@@ -727,7 +748,17 @@ export default function App() {
           {/* PREVIEW */}
           <main className="preview-center">
             <div className="preview-wrap">
-              <div className="preview-canvas" ref={previewRef}>
+              {/* Canvas aspect ratio updates live as user changes ratio */}
+            <div
+              className="preview-canvas"
+              ref={previewRef}
+              style={{
+                aspectRatio: exportRatio === "9:16" ? "9/16"
+                           : exportRatio === "1:1"  ? "1/1"
+                           : exportRatio === "4:5"  ? "4/5"
+                           : "16/9"
+              }}
+            >
                 {currentVideoClip ? (
                   currentVideoClip.type?.includes("image") ? (
                     <img src={currentVideoClip.src} alt={currentVideoClip.name}
@@ -1138,7 +1169,7 @@ const CSS = `
   --t1:#f0f0f0;--t2:#9a9a9a;--t3:#555;
   --acc:#37e584;--acc2:#2dc96f;
   --blue:#3b82f6;--green:#10b981;--orange:#f59e0b;--red:#ef4444;
-  --sw:240px;--th:52px;--tlh:200px;
+  --sw:240px;--th:52px;--tlh:270px;
 }
 body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overflow:hidden;height:100vh;}
 .shell{display:grid;grid-template-rows:var(--th) 1fr var(--tlh);height:100vh;}
@@ -1153,6 +1184,11 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 .export-btn{background:var(--acc);color:#0a1f12;border-color:var(--acc);font-weight:600;margin-left:auto;}
 .export-btn:hover{background:var(--acc2);}
 .export-btn:disabled{opacity:.5;cursor:not-allowed;}
+.ratio-group{display:flex;align-items:center;gap:3px;background:var(--bg);border:1px solid var(--b1);border-radius:8px;padding:3px;}
+.ratio-btn{padding:4px 9px;border-radius:5px;border:none;background:transparent;color:var(--t3);font-size:11px;font-weight:500;font-family:inherit;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.ratio-btn:hover{color:var(--t2);background:var(--s2);}
+.ratio-btn.active{background:var(--acc);color:#0a1f12;font-weight:700;}
+.preview-canvas{aspect-ratio:16/9;background:#000;border-radius:8px;border:1px solid var(--b1);position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;user-select:none;transition:aspect-ratio .2s ease;max-height:calc(100% - 60px);}
 .cancel-btn{background:transparent;color:var(--red);border-color:var(--red);font-weight:600;}
 .cancel-btn:hover{background:rgba(239,68,68,.15);color:var(--red);}
 .cancel-btn:disabled{opacity:.5;cursor:not-allowed;}
@@ -1195,7 +1231,7 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 .text-add-btn:hover{background:rgba(245,158,11,.15);}
 .preview-center{background:#0a0a0a;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:12px 16px;overflow:hidden;gap:0;}
 .preview-wrap{width:100%;max-width:720px;display:flex;flex-direction:column;gap:8px;min-height:0;flex:1;}
-.preview-canvas{aspect-ratio:16/9;background:#000;border-radius:8px;border:1px solid var(--b1);position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;user-select:none;}
+/* preview-canvas aspect-ratio now set inline via style prop */
 .preview-empty{text-align:center;color:var(--t3);display:flex;flex-direction:column;align-items:center;}
 .preview-empty p{font-size:11px;margin-top:4px;}
 .preview-tc{position:absolute;top:8px;right:10px;background:rgba(0,0,0,.7);padding:3px 8px;border-radius:5px;font-size:10px;font-family:'DM Mono',monospace;color:#fff;pointer-events:none;z-index:5;}
@@ -1240,7 +1276,7 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 .zoom-btn{width:26px;height:26px;border-radius:6px;border:1px solid var(--b1);background:var(--s2);color:var(--t2);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;}
 .zoom-btn:hover{background:var(--s3);color:var(--t1);}
 .zoom-lbl{font-size:10px;color:var(--t3);font-family:'DM Mono',monospace;min-width:34px;text-align:center;}
-.tl-scroll{flex:1;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scrollbar-color:var(--b1) transparent;}
+.tl-scroll{flex:1;overflow-x:auto;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--b1) transparent;}
 .tl-scroll::-webkit-scrollbar{height:4px;}
 .tl-scroll::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px;}
 .tl-inner{position:relative;}

@@ -151,7 +151,7 @@ app.post('/api/export-video', express.json(), (req, res) => {
     });
   }
 
-  let { tracks, videoClips, audioClips, projectName = `video-${Date.now()}` } = req.body;
+  let { tracks, videoClips, audioClips, projectName = `video-${Date.now()}`, ratio = '16:9' } = req.body;
 
   if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
     tracks = [
@@ -180,7 +180,7 @@ app.post('/api/export-video', express.json(), (req, res) => {
   const taskId = uuid();
   tasks[taskId] = { status: 'processing', outputUrl: null, error: null };
 
-  processVideoAsync(taskId, { tracks, projectName });
+  processVideoAsync(taskId, { tracks, projectName, ratio });
   res.json({ taskId, message: 'Export started' });
 });
 
@@ -289,7 +289,7 @@ async function processVideoAsync(taskId, data) {
   }, TIMEOUT_MS);
 
   try {
-    const outputPath = await videoProcessor.processTimeline(data);
+    const outputPath = await videoProcessor.processTimeline(data); // data includes ratio
     const filename   = path.basename(outputPath);
     tasks[taskId].status    = 'success';
     tasks[taskId].outputUrl = `/api/download/${filename}`;
