@@ -213,12 +213,16 @@ export default function App() {
     const activeClip = vt.clips.find(c => playhead >= c.start && playhead < c.end);
 
     vt.clips.forEach(c => {
-      const el = videoEls.current[c.id];
-      if (el && !el.paused) el.pause();
+      const el   = videoEls.current[c.id];
+      const fpEl = videoEls.current["fp-" + c.id];
+      if (el   && !el.paused)   el.pause();
+      if (fpEl && !fpEl.paused) fpEl.pause();
     });
 
     if (!activeClip) return;
-    const el = videoEls.current[activeClip.id];
+    // In full preview, the video element is registered with "fp-" prefix
+    const elKey = fullPreview ? "fp-" + activeClip.id : activeClip.id;
+    const el = videoEls.current[elKey];
     if (!el) return;
 
     const mediaOffset = activeClip.mediaOffset || 0;
@@ -229,7 +233,7 @@ export default function App() {
     }
     if (isPlaying && el.paused)  el.play().catch(() => {});
     if (!isPlaying && !el.paused) el.pause();
-  }, [playhead, isPlaying, tracks]);
+  }, [playhead, isPlaying, tracks, fullPreview]);
 
   /* ── FILE UPLOAD ──────────────────────────────────────────────────────── */
   const handleFileUpload = async (e) => {
@@ -762,13 +766,13 @@ export default function App() {
                 {currentVideoClip ? (
                   currentVideoClip.type?.includes("image") ? (
                     <img src={currentVideoClip.src} alt={currentVideoClip.name}
-                      style={{width:"100%",height:"100%",objectFit:"contain",display:"block"}} />
+                      style={{width:"100%",height:"100%",objectFit: exportRatio === "16:9" ? "contain" : "cover",display:"block"}} />
                   ) : (
                     <video
                       key={currentVideoClip.id}
                       ref={el => { if (el) videoEls.current[currentVideoClip.id] = el; }}
                       src={currentVideoClip.src}
-                      style={{width:"100%",height:"100%",objectFit:"contain",display:"block"}}
+                      style={{width:"100%",height:"100%",objectFit: exportRatio === "16:9" ? "contain" : "cover",display:"block"}}
                       playsInline muted={!!currentVideoClip.muted}
                     />
                   )
@@ -1059,29 +1063,25 @@ export default function App() {
 
           <div className="fp-box" onClick={e => e.stopPropagation()}>
             <div className="fp-header">
-              <span className="fp-title">Preview — {fmt(playhead)} / {fmt(totalDuration)}</span>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <button className="fp-ctrl" onClick={() => { setPlayhead(0); setIsPlaying(false); }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
-                </button>
-                <button className="fp-play" onClick={() => setIsPlaying(p => !p)}>
-                  {isPlaying
-                    ? <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                    : <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg>
-                  }
-                </button>
-              </div>
+              <span className="fp-title">{fmt(playhead)} / {fmt(totalDuration)}</span>
+              <button className="fp-ctrl-sm" onClick={() => { setPlayhead(0); setIsPlaying(false); }} title="Restart">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+              </button>
             </div>
-            <div className="fp-canvas">
+            <div className="fp-canvas" onClick={() => setIsPlaying(p => !p)} style={{cursor:"pointer"}}>
+              {/* Centered play/pause overlay */}
+              <div className="fp-play-overlay" style={{opacity: isPlaying ? 0 : 1}}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg>
+              </div>
               {currentVideoClip ? (
                 currentVideoClip.type?.includes("image") ? (
-                  <img src={currentVideoClip.src} style={{width:"100%",height:"100%",objectFit:"contain"}} alt="" />
+                  <img src={currentVideoClip.src} style={{width:"100%",height:"100%",objectFit: exportRatio === "16:9" ? "contain" : "cover"}} alt="" />
                 ) : (
                   <video
                     key={"fp-" + currentVideoClip.id}
                     ref={el => { if (el) { videoEls.current["fp-" + currentVideoClip.id] = el; fullVideoRef.current = el; } }}
                     src={currentVideoClip.src}
-                    style={{width:"100%",height:"100%",objectFit:"contain"}}
+                    style={{width:"100%",height:"100%",objectFit: exportRatio === "16:9" ? "contain" : "cover"}}
                     playsInline muted={currentVideoClip.muted}
                   />
                 )
@@ -1333,13 +1333,16 @@ select.modal-inp{appearance:none;}
 .clip-mute-badge{display:flex;align-items:center;background:rgba(0,0,0,.5);border-radius:3px;padding:1px 3px;flex-shrink:0;color:var(--orange);}
 .fp-overlay{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:300;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);}
 .fp-box{background:var(--bg);border:1px solid var(--b2);border-radius:14px;overflow:hidden;width:min(1100px,96vw);max-height:96vh;box-shadow:0 40px 100px rgba(0,0,0,.8);display:flex;flex-direction:column;}
-.fp-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--b1);background:var(--s1);}
+.fp-header{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;border-bottom:1px solid var(--b1);background:var(--s1);gap:10px;}
 .fp-back-btn{position:fixed;top:18px;left:18px;z-index:400;display:flex;align-items:center;gap:7px;padding:9px 16px;background:rgba(20,30,20,0.85);border:1.5px solid var(--acc);border-radius:10px;color:var(--acc);font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;transition:all .18s;white-space:nowrap;backdrop-filter:blur(8px);}
 .fp-back-btn:hover{background:var(--acc);color:#0a1f12;border-color:var(--acc);}
-.fp-title{font-size:13px;font-weight:600;font-family:'DM Mono',monospace;color:var(--t2);}
+.fp-title{font-size:12px;font-weight:500;font-family:'DM Mono',monospace;color:var(--t3);flex:1;}
+.fp-ctrl-sm{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;border:1px solid var(--b2);background:var(--s2);color:var(--t2);cursor:pointer;transition:all .15s;}
+.fp-ctrl-sm:hover{background:var(--b2);color:var(--t1);}
+.fp-play-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:10;transition:opacity .2s;pointer-events:none;}
+.fp-play-overlay > svg{width:56px;height:56px;color:#fff;filter:drop-shadow(0 2px 12px rgba(0,0,0,.8));opacity:.85;}
 .fp-canvas{flex:1;min-height:0;aspect-ratio:16/9;background:#000;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;width:100%;}
 .fp-ctrl{display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:6px;border:1px solid var(--b2);background:var(--s2);color:var(--t2);font-size:11px;cursor:pointer;transition:all .15s;font-family:inherit;}
 .fp-ctrl:hover{background:var(--s3);color:var(--t1);}
-.fp-play{width:36px;height:36px;border-radius:50%;background:var(--acc);border:none;color:#0a1f12;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;}
-.fp-play:hover{background:var(--acc2);transform:scale(1.05);}
+/* fp-play removed — play/pause now via click on canvas */
 `;

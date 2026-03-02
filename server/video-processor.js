@@ -41,9 +41,23 @@ function getScaleFilter(totalDurationSeconds, ratio = "16:9") {
   const h = Math.round(baseH * factor / 2) * 2;
 
   console.log(`  📐 Output: ${w}×${h} (ratio ${ratio}, duration ${Math.round(totalDurationSeconds)}s)`);
+
+  // For 16:9 → letterbox/pillarbox (shrink to fit, add black bars)
+  // For all other ratios → scale to fill then crop to exact canvas size.
+  // This ensures 9:16, 1:1, 4:5 exports are fully filled with no black bars.
+  let scaleStr;
+  if (ratio === "16:9") {
+    // Classic letterbox — safe for widescreen content
+    scaleStr = `scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
+               `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+  } else {
+    // Scale to fill: zoom in to cover the whole canvas, then crop excess
+    scaleStr = `scale=${w}:${h}:force_original_aspect_ratio=increase,` +
+               `crop=${w}:${h},setsar=1`;
+  }
+
   return {
-    scale: `scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
-           `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1`,
+    scale: scaleStr,
     width: w,
     height: h,
   };
