@@ -79,7 +79,7 @@ export default function AuthPage({ mode = "login" }) {
       </div>
 
       {/* back to landing */}
-      <Link to="/" className="auth-back">
+      <Link to="/home" className="auth-back">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         Back
       </Link>

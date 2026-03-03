@@ -11,18 +11,21 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
-        {/* Landing page */}
-        <Route path="/"       element={<Landing />} />
+        {/* Default: open link → login page */}
+        <Route path="/"       element={<Navigate to="/login" replace />} />
 
         {/* Auth pages */}
         <Route path="/login"  element={<AuthPage mode="login"  />} />
         <Route path="/signup" element={<AuthPage mode="signup" />} />
 
+        {/* Landing page — reachable via "About" link on login page */}
+        <Route path="/home"   element={<Landing />} />
+
         {/* Your existing video editor */}
         <Route path="/editor" element={<App />} />
 
-        {/* Anything else → landing */}
-        <Route path="*"       element={<Navigate to="/" replace />} />
+        {/* Anything else → login */}
+        <Route path="*"       element={<Navigate to="/login" replace />} />
       </Routes>
     </BrowserRouter>
   </React.StrictMode>,
