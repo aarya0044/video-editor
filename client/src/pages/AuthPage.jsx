@@ -70,6 +70,7 @@ export default function AuthPage({ mode = "login" }) {
     }
     setLoad(false);
   };
+  
 
   const googleLogin = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
