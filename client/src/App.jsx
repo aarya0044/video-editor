@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "./supabase.js";
 
 /* ─── API URL ─────────────────────────────────────────────────────────────── */
 const API_URL =
@@ -39,6 +41,7 @@ const IcMaximize  = () => <Ic d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m
 const IcMinimize  = () => <Ic d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" size={14} />;
 const IcVolume    = () => <Ic d="M11 5L6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" size={14} />;
 const IcMute      = () => <Ic d="M11 5L6 9H2v6h4l5 4V5zM23 9l-6 6M17 9l6 6" size={14} />;
+const IcLogout    = () => <Ic d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" size={14} />;
 
 /* ─── HELPERS ─────────────────────────────────────────────────────────────── */
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -64,6 +67,8 @@ const POS_MAP = {
    MAIN APP
 ═══════════════════════════════════════════════════════════════════════════ */
 export default function App() {
+  const nav = useNavigate();
+
   const [mediaFiles,    setMediaFiles]    = useState([]);
   const [tracks,        setTracks]        = useState([
     { id: "video-1", type: "video", name: "Video", clips: [] },
@@ -87,6 +92,7 @@ export default function App() {
   const [notification,  setNotification]  = useState(null);
   const [draggingFile,  setDraggingFile]  = useState(null);
   const [fullPreview,   setFullPreview]   = useState(false);
+  const [user,          setUser]          = useState(null);
   const fullVideoRef = useRef(null);
   const [previewingAudio, setPreviewingAudio] = useState(null);
   const audioPreviewRef = useRef(null);
@@ -97,10 +103,21 @@ export default function App() {
   const lastTimeRef  = useRef(null);
   const previewRef   = useRef(null);
   const videoEls     = useRef({});
-  const exportIntervalRef = useRef(null); // so we can clear it on cancel
-
-  // ── FIX: audioRef is ALWAYS mounted — never conditional ──────────────────
+  const exportIntervalRef = useRef(null);
   const audioRef = useRef(null);
+
+  // ── Get current user ──────────────────────────────────────────────────────
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user ?? null);
+    });
+  }, []);
+
+  // ── Logout ────────────────────────────────────────────────────────────────
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    nav("/login");
+  };
 
   /* derived */
   const pixelsPerSecond = 60 * zoom;
@@ -152,86 +169,57 @@ export default function App() {
     return () => cancelAnimationFrame(animRef.current);
   }, [isPlaying, totalDuration]);
 
-  /* ── AUDIO SYNC ───────────────────────────────────────────────────────────
-     FIX: Single combined useEffect. audioRef is always mounted so this
-     always works. We set .src directly when the clip changes — no state needed.
-  ─────────────────────────────────────────────────────────────────────────── */
+  /* ── AUDIO SYNC ───────────────────────────────────────────────────────── */
   useEffect(() => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
-
     const at = tracks.find(t => t.type === "audio");
     const clip = at?.clips?.[0];
-
     if (!clip) {
-      // No audio clip — stop and clear
       audioEl.pause();
       audioEl.src = "";
       return;
     }
-
-    // Update src if it changed (handles adding a new track or changing tracks)
     const clipSrc = clip.src || clip.url || "";
     if (clipSrc && audioEl.getAttribute("data-clip-src") !== clipSrc) {
       audioEl.src = clipSrc;
       audioEl.load();
       audioEl.setAttribute("data-clip-src", clipSrc);
     }
-
-    // Always sync volume/mute
     audioEl.muted  = !!clip.muted;
     audioEl.volume = clip.volume ?? 1;
-
-    // Compute where in the audio file we should be
     const mediaOffset = clip.mediaOffset || 0;
     const localTime   = mediaOffset + (playhead - clip.start);
-
-    // Playhead is outside this clip's range — pause
     if (playhead < clip.start || playhead >= clip.end) {
       if (!audioEl.paused) audioEl.pause();
       return;
     }
-
-    // Seek if drifted more than 300ms
     if (Math.abs(audioEl.currentTime - localTime) > 0.3) {
       audioEl.currentTime = Math.max(0, localTime);
     }
-
-    if (isPlaying && audioEl.paused) {
-      audioEl.play().catch(() => {});
-    }
-    if (!isPlaying && !audioEl.paused) {
-      audioEl.pause();
-    }
+    if (isPlaying && audioEl.paused)  audioEl.play().catch(() => {});
+    if (!isPlaying && !audioEl.paused) audioEl.pause();
   }, [playhead, isPlaying, tracks]);
 
   /* ── VIDEO SYNC ───────────────────────────────────────────────────────── */
   useEffect(() => {
     const vt = tracks.find(t => t.type === "video");
     if (!vt) return;
-
     const activeClip = vt.clips.find(c => playhead >= c.start && playhead < c.end);
-
     vt.clips.forEach(c => {
       const el   = videoEls.current[c.id];
       const fpEl = videoEls.current["fp-" + c.id];
       if (el   && !el.paused)   el.pause();
       if (fpEl && !fpEl.paused) fpEl.pause();
     });
-
     if (!activeClip) return;
-    // In full preview, the video element is registered with "fp-" prefix
     const elKey = fullPreview ? "fp-" + activeClip.id : activeClip.id;
     const el = videoEls.current[elKey];
     if (!el) return;
-
     const mediaOffset = activeClip.mediaOffset || 0;
     const localTime   = mediaOffset + (playhead - activeClip.start);
-
-    if (Math.abs(el.currentTime - localTime) > 0.3) {
-      el.currentTime = localTime;
-    }
-    if (isPlaying && el.paused)  el.play().catch(() => {});
+    if (Math.abs(el.currentTime - localTime) > 0.3) el.currentTime = localTime;
+    if (isPlaying && el.paused)   el.play().catch(() => {});
     if (!isPlaying && !el.paused) el.pause();
   }, [playhead, isPlaying, tracks, fullPreview]);
 
@@ -423,7 +411,7 @@ export default function App() {
     const insertAt = at?.clips.length ? Math.max(...at.clips.map(c => c.end)) : 0;
     const clip = {
       id: uid(), name: audio.name,
-      src: audio.url,        // full URL e.g. http://localhost:5000/audio/chill-lofi.mp3
+      src: audio.url,
       type: "audio/mpeg",
       start: insertAt, end: insertAt + audio.duration,
       duration: audio.duration, mediaOffset: 0, muted: false, volume: 1.0,
@@ -433,8 +421,6 @@ export default function App() {
         ? { ...t, clips: [...t.clips, clip].sort((a, b) => a.start - b.start) }
         : t
     ));
-    // FIX: No setPreviewAudio needed — the audio useEffect above handles
-    // setting audioEl.src directly from tracks state whenever tracks changes.
     showNotif(`Added "${audio.name}" to Audio track`);
   };
 
@@ -480,7 +466,6 @@ export default function App() {
     setExporting(true);
     try {
       const cleanTracks = JSON.parse(JSON.stringify(tracks));
-      console.log("📤 Exporting:", cleanTracks.map(t => `${t.type}:${t.clips.length}`).join(", "));
       const response = await fetch(`${API_URL}/api/export-video`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tracks: cleanTracks, projectName: `project_${Date.now()}`, ratio: exportRatio }),
@@ -490,7 +475,6 @@ export default function App() {
         try {
           const d = await response.json();
           msg = d.error || msg;
-          // 429 = another export is running
           if (response.status === 429) {
             showNotif("⏳ Server is busy with another export. Please wait a moment and try again.", "error");
             setExporting(false);
@@ -504,10 +488,9 @@ export default function App() {
       if (!taskId) throw new Error(d?.error || "No task ID returned from server");
       showNotif("Export started — processing in background…");
       let attempts = 0;
-      const maxAttempts = 300; // 15 minutes (300 × 3s)
+      const maxAttempts = 300;
       exportIntervalRef.current = setInterval(async () => {
         attempts += 1;
-        // Keep Koyeb instance alive — prevents shutdown during long exports
         fetch(`${API_URL}/api/health`).catch(() => {});
         try {
           const statusRes  = await fetch(`${API_URL}/api/status/${taskId}`);
@@ -536,7 +519,6 @@ export default function App() {
             exportIntervalRef.current = null;
             setExporting(false);
             showNotif("Export failed — check console for details", "error");
-            console.error("Export failed:", statusData.error);
           } else if (attempts >= maxAttempts) {
             clearInterval(exportIntervalRef.current);
             exportIntervalRef.current = null;
@@ -551,18 +533,16 @@ export default function App() {
         }
       }, 3000);
     } catch (err) {
-      console.error("Export error:", err);
       showNotif(`Export failed: ${err.message}`, "error");
       setExporting(false);
     }
   };
 
-  /* ── CANCEL EXPORT ───────────────────────────────────────────────────────── */
+  /* ── CANCEL EXPORT ───────────────────────────────────────────────────── */
   const handleCancelExport = async () => {
     setCancelling(true);
     try {
       await fetch(`${API_URL}/api/cancel-export`, { method: "POST" });
-      // Clear the polling interval so the UI stops waiting
       if (exportIntervalRef.current) {
         clearInterval(exportIntervalRef.current);
         exportIntervalRef.current = null;
@@ -586,12 +566,6 @@ export default function App() {
   return (
     <>
       <style>{CSS}</style>
-
-      {/*
-        FIX: <audio> is ALWAYS in the DOM, never conditional.
-        audioRef.current is therefore always valid when useEffect runs.
-        We manage src via audioEl.src = ... inside the useEffect above.
-      */}
       <audio ref={audioRef} preload="auto" style={{ display: "none" }} />
 
       <div className="shell">
@@ -639,6 +613,18 @@ export default function App() {
               {cancelling ? "Cancelling…" : "✕ Cancel"}
             </button>
           )}
+
+          {/* USER + LOGOUT */}
+          <div className="user-area">
+            {user && (
+              <div className="user-avatar" title={user.email}>
+                {(user.user_metadata?.full_name || user.email || "U")[0].toUpperCase()}
+              </div>
+            )}
+            <button className="tbtn logout-btn" onClick={handleLogout} title="Sign out">
+              <IcLogout /> Sign out
+            </button>
+          </div>
         </header>
 
         {/* MAIN AREA */}
@@ -752,7 +738,6 @@ export default function App() {
           {/* PREVIEW */}
           <main className="preview-center">
             <div className="preview-wrap">
-              {/* Canvas aspect ratio updates live as user changes ratio */}
             <div
               className="preview-canvas"
               ref={previewRef}
@@ -1050,17 +1035,10 @@ export default function App() {
       {/* FULL PREVIEW MODAL */}
       {fullPreview && (
         <div className="fp-overlay" onClick={() => { setIsPlaying(false); setFullPreview(false); }}>
-
-          {/* Floating back button — always visible top-left over the overlay */}
-          <button
-            className="fp-back-btn"
-            onClick={() => { setIsPlaying(false); setFullPreview(false); }}
-            title="Back to editor"
-          >
+          <button className="fp-back-btn" onClick={() => { setIsPlaying(false); setFullPreview(false); }} title="Back to editor">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
             Back to Editor
           </button>
-
           <div className="fp-box" onClick={e => e.stopPropagation()}>
             <div className="fp-header">
               <span className="fp-title">{fmt(playhead)} / {fmt(totalDuration)}</span>
@@ -1069,7 +1047,6 @@ export default function App() {
               </button>
             </div>
             <div className="fp-canvas" onClick={() => setIsPlaying(p => !p)} style={{cursor:"pointer"}}>
-              {/* Centered play/pause overlay */}
               <div className="fp-play-overlay" style={{opacity: isPlaying ? 0 : 1}}>
                 <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg>
               </div>
@@ -1201,6 +1178,10 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 .cancel-btn:hover{background:rgba(239,68,68,.15);color:var(--red);}
 .cancel-btn:disabled{opacity:.5;cursor:not-allowed;}
 .timecode{font-family:'DM Mono',monospace;font-size:12px;color:var(--t2);padding:4px 10px;background:var(--bg);border-radius:6px;border:1px solid var(--b1);}
+.user-area{display:flex;align-items:center;gap:8px;margin-left:4px;}
+.user-avatar{width:28px;height:28px;border-radius:50%;background:var(--acc);color:#0a1f12;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.logout-btn{color:var(--t3);border-color:var(--b1);}
+.logout-btn:hover{color:var(--red);border-color:var(--red);background:rgba(239,68,68,.08);}
 .sidebar{background:var(--s1);border-right:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden;}
 .stabs{display:flex;border-bottom:1px solid var(--b1);}
 .stab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:9px 4px;font-size:9px;color:var(--t3);cursor:pointer;border:none;background:none;transition:all .15s;border-bottom:2px solid transparent;font-family:inherit;}
@@ -1239,7 +1220,6 @@ body{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;overf
 .text-add-btn:hover{background:rgba(245,158,11,.15);}
 .preview-center{background:#0a0a0a;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:12px 16px;overflow:hidden;gap:0;}
 .preview-wrap{width:100%;max-width:720px;display:flex;flex-direction:column;gap:8px;min-height:0;flex:1;}
-/* preview-canvas aspect-ratio now set inline via style prop */
 .preview-empty{text-align:center;color:var(--t3);display:flex;flex-direction:column;align-items:center;}
 .preview-empty p{font-size:11px;margin-top:4px;}
 .preview-tc{position:absolute;top:8px;right:10px;background:rgba(0,0,0,.7);padding:3px 8px;border-radius:5px;font-size:10px;font-family:'DM Mono',monospace;color:#fff;pointer-events:none;z-index:5;}
@@ -1344,5 +1324,4 @@ select.modal-inp{appearance:none;}
 .fp-canvas{flex:1;min-height:0;aspect-ratio:16/9;background:#000;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;width:100%;}
 .fp-ctrl{display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:6px;border:1px solid var(--b2);background:var(--s2);color:var(--t2);font-size:11px;cursor:pointer;transition:all .15s;font-family:inherit;}
 .fp-ctrl:hover{background:var(--s3);color:var(--t1);}
-/* fp-play removed — play/pause now via click on canvas */
 `;
