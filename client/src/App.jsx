@@ -464,6 +464,33 @@ export default function App() {
     const vt = tracks.find(t => t.type === "video");
     if (!vt?.clips.length) { showNotif("Add video clips first", "error"); return; }
     setExporting(true);
+
+    // ── Track export in Supabase ──────────────────────────────────────────
+    let exportRowId = null;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        const { data } = await supabase.from("exports").insert({
+          user_id:    session.user.id,
+          status:     "processing",
+          ratio:      exportRatio,
+          created_at: new Date().toISOString(),
+        }).select().single();
+        if (data) exportRowId = data.id;
+      }
+    } catch (e) { console.warn("Supabase export tracking error:", e); }
+
+    // helper to update the row status
+    const updateExportRow = async (status) => {
+      if (!exportRowId) return;
+      try {
+        await supabase.from("exports").update({
+          status,
+          completed_at: new Date().toISOString(),
+        }).eq("id", exportRowId);
+      } catch (e) { console.warn("Supabase update error:", e); }
+    };
+
     try {
       const cleanTracks = JSON.parse(JSON.stringify(tracks));
       const response = await fetch(`${API_URL}/api/export-video`, {
@@ -478,6 +505,7 @@ export default function App() {
           if (response.status === 429) {
             showNotif("⏳ Server is busy with another export. Please wait a moment and try again.", "error");
             setExporting(false);
+            await updateExportRow("failed");
             return;
           }
         } catch {}
@@ -500,6 +528,7 @@ export default function App() {
             clearInterval(exportIntervalRef.current);
             exportIntervalRef.current = null;
             setExporting(false);
+            await updateExportRow("success");
             const downloadUrl = statusData.outputUrl.startsWith("http")
               ? statusData.outputUrl : `${API_URL}${statusData.outputUrl}`;
             const a = document.createElement("a");
@@ -513,28 +542,33 @@ export default function App() {
             clearInterval(exportIntervalRef.current);
             exportIntervalRef.current = null;
             setExporting(false);
+            await updateExportRow("cancelled");
             showNotif("Export cancelled", "error");
           } else if (statusData.status === "failed") {
             clearInterval(exportIntervalRef.current);
             exportIntervalRef.current = null;
             setExporting(false);
+            await updateExportRow("failed");
             showNotif("Export failed — check console for details", "error");
           } else if (attempts >= maxAttempts) {
             clearInterval(exportIntervalRef.current);
             exportIntervalRef.current = null;
             setExporting(false);
+            await updateExportRow("failed");
             showNotif("Export timed out — try again", "error");
           }
         } catch (err) {
           clearInterval(exportIntervalRef.current);
           exportIntervalRef.current = null;
           setExporting(false);
+          await updateExportRow("failed");
           showNotif(`Export failed: ${err.message}`, "error");
         }
       }, 3000);
     } catch (err) {
       showNotif(`Export failed: ${err.message}`, "error");
       setExporting(false);
+      await updateExportRow("failed");
     }
   };
 
