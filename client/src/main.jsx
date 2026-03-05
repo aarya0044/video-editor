@@ -8,7 +8,7 @@ import { supabase } from './supabase.js'
 import './index.css'
 import 'bootstrap/dist/css/bootstrap.min.css';
 
-// ── Blocks /editor if not logged in ──────────────────────────────────────────
+// ── Blocks /editor — redirects to /login if not signed in ────────────────────
 function ProtectedRoute({ children }) {
   const [checking, setChecking] = useState(true);
   const [authed,   setAuthed]   = useState(false);
@@ -37,15 +37,15 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
-        {/* Default → login */}
-        <Route path="/"       element={<Navigate to="/login" replace />} />
+        {/* Root → landing page */}
+        <Route path="/"       element={<Landing />} />
+
+        {/* Landing also accessible at /home */}
+        <Route path="/home"   element={<Landing />} />
 
         {/* Auth */}
         <Route path="/login"  element={<AuthPage mode="login"  />} />
         <Route path="/signup" element={<AuthPage mode="signup" />} />
-
-        {/* Landing */}
-        <Route path="/home"   element={<Landing />} />
 
         {/* Editor — must be logged in */}
         <Route path="/editor" element={
@@ -54,8 +54,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           </ProtectedRoute>
         } />
 
-        {/* Catch-all → login */}
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        {/* Catch-all → landing */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   </React.StrictMode>,
